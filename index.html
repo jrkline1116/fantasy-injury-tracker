@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fantasy Injury Tracker</title>
+<meta name="theme-color" content="#15202B">
+<meta name="description" content="Push alerts when your fantasy players, or the players they depend on, are ruled out or cleared.">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-96.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="titlebar"><h1>Fantasy Injury Tracker</h1><span class="ver" id="ver"></span></div>
+    <div class="tabs" id="tabs" role="tablist" aria-label="Your teams"></div>
+  </div>
+</header>
+<div class="wrap"><div id="banner"></div></div>
+<main class="wrap" id="view"><p class="sub" style="padding-top:20px">Loading…</p></main>
+<nav class="bottom" id="nav" aria-label="Sections" hidden><div class="wrap">
+  <button data-nav="teams">Teams</button>
+  <button data-nav="alerts">Alerts</button>
+  <button data-nav="settings">Settings</button>
+</div></nav>
+<dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
