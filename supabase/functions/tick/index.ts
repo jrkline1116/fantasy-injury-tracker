@@ -13,8 +13,32 @@ import {
 } from "../_shared/core.ts";
 
 const SLEEPER_PLAYERS = "https://api.sleeper.app/v1/players/nfl";
-const ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
-const ESPN_INJURIES = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/injuries";
+const ESPN_SCOREBOARD = "/apis/site/v2/sports/football/nfl/scoreboard";
+const ESPN_INJURIES = "/apis/site/v2/sports/football/nfl/injuries";
+// ESPN's unofficial API sometimes blocks a host or a user agent. Try a few combinations
+// and remember which one worked, so the next run starts with it.
+const ESPN_HOSTS = ["https://site.api.espn.com", "https://site.web.api.espn.com"];
+const ESPN_AGENTS: (Record<string, string> | undefined)[] = [
+  { "user-agent": "FantasyInjuryTracker/1.0", accept: "application/json" },
+  undefined,
+  { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36", accept: "application/json", referer: "https://www.espn.com/" },
+];
+let espnPreferred = 0;
+async function espnJson(path: string) {
+  const combos: [string, Record<string, string> | undefined][] = [];
+  for (const h of ESPN_HOSTS) for (const a of ESPN_AGENTS) combos.push([h, a]);
+  const order = [...combos.keys()].sort((x, y) => (x === espnPreferred ? -1 : y === espnPreferred ? 1 : x - y));
+  const tried: string[] = [];
+  for (const i of order) {
+    const [host, headers] = combos[i];
+    try {
+      const res = await fetch(host + path, headers ? { headers } : undefined);
+      if (res.ok) { espnPreferred = i; return await res.json(); }
+      tried.push(`${new URL(host).hostname}/${headers ? headers["user-agent"].split("/")[0] : "default"}:${res.status}`);
+    } catch (e) { tried.push(`${host}:${(e as Error).message}`); }
+  }
+  throw new Error(`ESPN ${path.split("/").pop()} failed (${tried.join(", ")})`);
+}
 const FANTASY_POS = new Set(["QB", "RB", "WR", "TE", "K", "DEF", "DL", "DE", "DT", "LB", "DB", "CB", "S"]);
 
 Deno.serve(async (req) => {
@@ -30,7 +54,12 @@ Deno.serve(async (req) => {
   };
 
   if (due("players", 20 * 60)) await run("players", () => syncPlayers(admin));
-  if (due("schedule", 180)) await run("schedule", () => syncSchedule(admin));
+  if (due("schedule", 180) || (state.schedule_failed && due("schedule", 15))) {
+    await run("schedule", async () => {
+      try { const r = await syncSchedule(admin); await admin.from("job_state").delete().eq("key", "schedule_failed"); return r; }
+      catch (e) { await setState(admin, "schedule_failed", now); throw e; }
+    });
+  }
 
   const { data: gamesData } = await admin.from("games").select("*")
     .gte("kickoff", new Date(now.getTime() - 5 * 3600e3).toISOString())
@@ -88,9 +117,7 @@ async function syncPlayers(admin: Admin) {
 
 /* ---------- schedule from ESPN ---------- */
 async function syncSchedule(admin: Admin) {
-  const res = await fetch(ESPN_SCOREBOARD);
-  if (!res.ok) throw new Error(`ESPN scoreboard ${res.status}`);
-  const d = await res.json();
+  const d = await espnJson(ESPN_SCOREBOARD);
   const rows = (d.events ?? []).map((ev: any) => {
     const cs = ev.competitions?.[0]?.competitors ?? [];
     return {
@@ -128,9 +155,7 @@ function extractInjuries(data: unknown): Inj[] {
 }
 
 async function pollInjuries(admin: Admin, now: Date, firstRun: boolean) {
-  const res = await fetch(ESPN_INJURIES, { headers: { "user-agent": "FantasyInjuryTracker/1.0" } });
-  if (!res.ok) throw new Error(`ESPN injuries ${res.status}`);
-  const entries = extractInjuries(await res.json());
+  const entries = extractInjuries(await espnJson(ESPN_INJURIES));
   if (entries.length < 50) throw new Error(`injury feed looked incomplete (${entries.length} entries); skipped`);
 
   const players = await fetchAll<{ id: string; espn_id: string | null; search_name: string; team: string | null }>(
