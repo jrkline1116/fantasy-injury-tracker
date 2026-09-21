@@ -13,24 +13,31 @@ import {
 } from "../_shared/core.ts";
 
 const SLEEPER_PLAYERS = "https://api.sleeper.app/v1/players/nfl";
-const ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
-const ESPN_INJURIES = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/injuries";
-// ESPN rejects requests that don't look like a browser, so send browser-style headers.
-const ESPN_HEADERS = {
-  "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36",
-  "accept": "application/json,text/plain,*/*",
-  "accept-language": "en-US,en;q=0.9",
-  "referer": "https://www.espn.com/",
-};
-async function espnJson(url: string) {
-  let last = 0;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await fetch(url + (url.includes("?") ? "&" : "?") + "_=" + Date.now(), { headers: ESPN_HEADERS });
-    if (res.ok) return await res.json();
-    last = res.status;
-    await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+const ESPN_SCOREBOARD = "/apis/site/v2/sports/football/nfl/scoreboard";
+const ESPN_INJURIES = "/apis/site/v2/sports/football/nfl/injuries";
+// ESPN's unofficial API sometimes blocks a host or a user agent. Try a few combinations
+// and remember which one worked, so the next run starts with it.
+const ESPN_HOSTS = ["https://site.api.espn.com", "https://site.web.api.espn.com"];
+const ESPN_AGENTS: (Record<string, string> | undefined)[] = [
+  { "user-agent": "FantasyInjuryTracker/1.0", accept: "application/json" },
+  undefined,
+  { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36", accept: "application/json", referer: "https://www.espn.com/" },
+];
+let espnPreferred = 0;
+async function espnJson(path: string) {
+  const combos: [string, Record<string, string> | undefined][] = [];
+  for (const h of ESPN_HOSTS) for (const a of ESPN_AGENTS) combos.push([h, a]);
+  const order = [...combos.keys()].sort((x, y) => (x === espnPreferred ? -1 : y === espnPreferred ? 1 : x - y));
+  const tried: string[] = [];
+  for (const i of order) {
+    const [host, headers] = combos[i];
+    try {
+      const res = await fetch(host + path, headers ? { headers } : undefined);
+      if (res.ok) { espnPreferred = i; return await res.json(); }
+      tried.push(`${new URL(host).hostname}/${headers ? headers["user-agent"].split("/")[0] : "default"}:${res.status}`);
+    } catch (e) { tried.push(`${host}:${(e as Error).message}`); }
   }
-  throw new Error(`ESPN ${url.split("/").pop()} ${last}`);
+  throw new Error(`ESPN ${path.split("/").pop()} failed (${tried.join(", ")})`);
 }
 const FANTASY_POS = new Set(["QB", "RB", "WR", "TE", "K", "DEF", "DL", "DE", "DT", "LB", "DB", "CB", "S"]);
 
