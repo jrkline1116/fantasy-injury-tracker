@@ -47,16 +47,16 @@ h2:first-child{margin-top:4px}
 .link .arrow{font-family:var(--cond);font-weight:700;color:var(--ink);opacity:.55}
 .link b{color:var(--ink);font-weight:500}
 .tag{font-size:.75rem;border:1px solid var(--line);border-radius:4px;padding:0 5px;color:var(--muted);white-space:nowrap}
-/* status badges read without color: outline, dashed, and filled variants plus a letter */
-.st{font:700 .95rem/1 var(--cond);min-width:2.4em;text-align:center;padding:5px 6px 4px;border-radius:4px;border:2px solid currentColor;letter-spacing:.03em;flex:none}
-.st.ACT{color:var(--act)}
-.st.Q{color:var(--q);border-style:dashed}
-.st.D{color:#fff;background:var(--d);border-color:var(--d)}
-.st.O{color:#fff;background:var(--out);border-color:var(--out)}
-.st.IR{color:#fff;background:var(--ir);border-color:var(--ir)}
-.st.SUS{color:var(--bg);background:var(--sus);border-color:var(--sus)}
-.st.T{color:var(--muted)}
-.st.sm{font-size:.8rem;padding:3px 4px 2px;min-width:2.2em;border-width:1.5px}
+/* status badges: solid fill + letter, so color and shape both carry the meaning */
+.st{font:700 .85rem/1 var(--body);letter-spacing:.06em;min-width:2.3em;text-align:center;padding:6px 7px 5px;border-radius:5px;border:0;color:#fff;flex:none}
+.st.ACT{background:#1E8A54}
+.st.Q{background:#E8B90B;color:#1B1B1B}
+.st.D{background:#E06C10}
+.st.O{background:#C62828}
+.st.IR{background:#6A2C5B}
+.st.SUS{background:#4A5B66}
+.st.T{background:transparent;color:var(--muted);border:1.5px solid var(--line)}
+.st.sm{font-size:.72rem;padding:4px 5px 3px;min-width:2.1em}
 .btn{border:0;border-radius:8px;padding:10px 16px;font-weight:600;background:var(--brand);color:var(--brand-ink)}
 .btn.ghost{background:transparent;color:var(--ink);border:1.5px solid var(--line)}
 .btn.danger{background:transparent;color:var(--out);border:1.5px solid var(--out)}

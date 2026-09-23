@@ -1,8 +1,8 @@
 // Bump VERSION on every release so phones pick up the new files.
-const VERSION = "1.4.0";
+const VERSION = "1.5.0";
 const CACHE = "fit-" + VERSION;
 const SHELL = ["./", "./index.html", "./app.css", "./app.js", "./config.js", "./manifest.json",
-  "./icons/icon-96.png", "./icons/icon-192.png", "./icons/icon-512.png"];
+  "./icons/icon-96.png", "./icons/badge-96.png", "./icons/icon-192.png", "./icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
@@ -44,7 +44,7 @@ self.addEventListener("push", (e) => {
     tag: d.tag,
     renotify: !!d.tag,
     icon: "icons/icon-192.png",
-    badge: "icons/icon-96.png",
+    badge: "icons/badge-96.png",
     data: { url: d.url || "./" },
   }));
 });
