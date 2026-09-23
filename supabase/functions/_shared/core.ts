@@ -172,10 +172,21 @@ function names(a: Player, b: Player): [string, string] {
   return sa === sb ? [a.full_name, b.full_name] : [sa, sb];
 }
 
-const going = (from: string, to: string) => WONT_PLAY.has(to) && !WONT_PLAY.has(from);
-const cleared = (from: string, to: string) => (!WONT_PLAY.has(to) && WONT_PLAY.has(from)) || (to === "ACT" && from !== "ACT");
-/** "Out or cleared": ruled out, or back to playing. Skips Questionable/Doubtful tags on healthy players. */
-const isImpact = (from: string, to: string) => going(from, to) || cleared(from, to);
+const RANK: Record<string, number> = { ACT: 0, Q: 1, D: 2, O: 3, SUS: 3, IR: 4 };
+/** What kind of move this is, so the wording can match it. */
+function classify(from: string, to: string) {
+  return {
+    out: WONT_PLAY.has(to) && !WONT_PLAY.has(from),           // ruled out / IR / suspended
+    back: !WONT_PLAY.has(to) && WONT_PLAY.has(from),          // out -> can play again (maybe still Q/D)
+    clear: to === "ACT" && from !== "ACT",                     // fully cleared
+    up: (RANK[to] ?? 0) < (RANK[from] ?? 0),                   // trending better
+    down: (RANK[to] ?? 0) > (RANK[from] ?? 0),                 // trending worse
+  };
+}
+const going = (from: string, to: string) => classify(from, to).out;
+/** "Out or cleared": ruled out, back to playing, or fully cleared. Skips new Questionable/Doubtful tags. */
+function isImpact(from: string, to: string) { const m = classify(from, to); return m.out || m.back || m.clear; }
+const lower = (s: string) => word(s).toLowerCase();
 
 function level(st: Settings, team: any, r: any, l: any): string {
   if (l && l.notify !== "inherit") return l.notify;
@@ -203,7 +214,7 @@ export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; tes
   for (const ch of changes) {
     const pl = ctx.players.get(ch.playerId);
     if (!pl) continue;
-    const isOut = going(ch.from, ch.to), isBack = cleared(ch.from, ch.to);
+    const m = classify(ch.from, ch.to), isOut = m.out;
     const byUser = new Map<string, { lines: Line[]; urgent: boolean }>();
 
     for (const t of ctx.teams) {
@@ -228,14 +239,18 @@ export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; tes
       // 2. the trigger is on your roster
       for (const r of troster.filter((r) => r.player_id === ch.playerId)) {
         if (!wants(level(st, t, r, null), ch.from, ch.to)) continue;
-        const where = r.slot === "start" ? "In your lineup" : "On your bench";
+        const starting = r.slot === "start";
+        const where = starting ? "In your lineup" : "On your bench";
         if (!ruleFired) {
-          if (isOut) add(`${where} · ${r.slot === "start" ? "swap him out" : "no change needed"}`);
-          else if (isBack) add(`${where} · ${r.slot === "start" ? "good to go" : "consider starting"}`);
-          else add(`${where} · ${r.slot === "start" ? "monitor" : "no change needed"}`);
+          if (m.out) add(`${where} · ${starting ? "swap him out" : "no change needed"}`);
+          else if (m.clear) add(`${where} · ${starting ? "cleared to play" : "cleared to play, consider starting"}`);
+          else if (m.up) add(`${where} · trending up, still ${lower(ch.to)}`);
+          else if (m.down && ch.to === "D") add(`${where} · ${starting ? "doubtful, line up a backup" : "doubtful, unlikely to play"}`);
+          else if (m.down) add(`${where} · ${lower(ch.to)}, ${starting ? "monitor before kickoff" : "monitor"}`);
+          else add(`${where} · ${lower(ch.to)}`);
         }
         // his handcuff moves up
-        if (isOut && r.slot === "start" && st.upside) {
+        if (m.out && starting && st.upside) {
           for (const hc of tlinks.filter((l) => l.roster_id === r.id && l.kind === "handcuff")) {
             const hp = ctx.players.get(hc.player_id);
             if (!hp || (hp.depth_order ?? 99) < (pl.depth_order ?? 99)) continue; // linked RB is the starter, not a handcuff
@@ -253,21 +268,20 @@ export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; tes
         const fp = r && ctx.players.get(r.player_id);
         if (!r || !fp) continue;
         if (!wants(level(st, t, r, l), ch.from, ch.to)) continue;
-        const [, f] = names(pl, fp);
+        const [trig, f] = names(pl, fp);
         const starting = r.slot === "start";
         if (l.kind === "handcuff") {
           const triggerIsStarter = (pl.depth_order ?? 99) < (fp.depth_order ?? 99);
-          if (isOut) {
-            if (!triggerIsStarter || !st.upside) continue;
-            add(`→ ${f} UPGRADE · ${starting ? "keep him in" : "start him"}`);
-          } else if (isBack) {
-            if (!triggerIsStarter) continue;
-            add(`→ ${f} DOWNGRADE · ${starting ? "consider benching" : "keep him benched"}`);
-          } else add(`→ affects ${f} · monitor`);
+          if (!triggerIsStarter) continue; // a backup's status doesn't change your player's role
+          if (m.out) { if (!st.upside) continue; add(`→ ${f} UPGRADE · ${starting ? "keep him in" : "start him"}`); }
+          else if (m.clear) add(`→ ${f} DOWNGRADE · ${starting ? "consider benching" : "keep him benched"}`);
+          else if (m.up) add(`→ ${f} WATCH · ${trig} trending up, still ${lower(ch.to)}`);
+          else if (m.down) add(`→ ${f} WATCH · ${trig} ${lower(ch.to)}, could open up work`);
         } else {
-          if (isOut) add(`→ ${f} DOWNGRADE · ${starting ? "consider benching" : "keep him benched"}`);
-          else if (isBack) add(`→ ${f} UPGRADE · ${starting ? "good to go" : "consider starting"}`);
-          else add(`→ affects ${f} · monitor`);
+          if (m.out) add(`→ ${f} DOWNGRADE · ${starting ? "consider benching" : "keep him benched"}`);
+          else if (m.clear) add(`→ ${f} UPGRADE · ${starting ? "good to go" : "consider starting"}`);
+          else if (m.up) add(`→ ${f} WATCH · ${trig} trending up, still ${lower(ch.to)}`);
+          else if (m.down) add(`→ ${f} WATCH · ${trig} ${lower(ch.to)}, ${starting ? "monitor before kickoff" : "monitor"}`);
         }
       }
     }
@@ -277,7 +291,7 @@ export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; tes
       const held = isOut || e.urgent || opts.test ? null : quietHoldUntil(st, opts.now);
       out.push({
         user_id: uid, kind: opts.test ? "test" : "status", status: ch.to,
-        title: `${opts.test ? "Test: " : ""}${shortName(pl)} ${word(ch.to)}`,
+        title: `${opts.test ? "Test: " : ""}${shortName(pl)} ${word(ch.from)} → ${word(ch.to)}`,
         lines: e.lines,
         dedupe_key: opts.test ? `test:${crypto.randomUUID()}` : `status:${uid}:${ch.playerId}:${ch.eventId ?? Date.now()}`,
         held_until: held ? held.toISOString() : null, push: true,

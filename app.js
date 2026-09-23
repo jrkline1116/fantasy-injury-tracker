@@ -1,6 +1,6 @@
 /* Fantasy Injury Tracker — app */
 "use strict";
-const APP_VERSION = "1.2.0"; // keep in sync with sw.js VERSION
+const APP_VERSION = "1.4.0"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -43,25 +43,50 @@ if (!CONFIGURED) {
   sb.auth.getSession().then(({ data }) => { S.session = data.session; if (!data.session) renderSignIn(); else loadAll(); });
 }
 window.addEventListener("hashchange", () => { S.view = (location.hash || "#teams").slice(1); if (S.loaded) render(); });
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.loaded) refresh(); });
-setInterval(() => { if (document.visibilityState === "visible" && S.loaded) refresh(); }, 60000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.loaded && !userBusy()) refresh(); });
+const userBusy = () => dlg.open || ["INPUT", "SELECT"].includes(document.activeElement?.tagName);
+setInterval(() => { if (document.visibilityState === "visible" && S.loaded && !userBusy()) refresh(); }, 60000);
 
 /* ---------------- auth ---------------- */
 function renderSignIn(msg) {
   $("nav").hidden = true; $("tabs").innerHTML = "";
   $("view").innerHTML = `<div class="panel setting" style="margin-top:8px">
     <h2>Sign in</h2><p class="sub">We'll email you a sign-in link. No password needed.</p>
-    <label class="f" for="em">Email</label><input type="email" id="em" autocomplete="email" placeholder="you@example.com">
+    <label class="f" for="em">Email</label><input type="email" id="em" autocomplete="email" placeholder="you@example.com" value="${esc(localStorage.getItem("fit-email") || "")}">
     <div class="actions"><button class="btn" data-act="sendLink">Email me a link</button></div>
     <div id="authMsg" class="${msg ? "err" : "hint"}">${esc(msg || "")}</div></div>`;
 }
-async function sendLink() {
-  const email = $("em").value.trim();
-  if (!email) return $("em").focus();
-  const redirect = location.origin + location.pathname;
-  const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: redirect } });
-  $("authMsg").className = error ? "err" : "hint";
-  $("authMsg").textContent = error ? error.message : "Check your email and tap the link. It opens the app signed in.";
+let resendTimer = null;
+async function sendLink(email) {
+  email = (email || $("em")?.value || "").trim();
+  if (!email) return $("em")?.focus();
+  const btn = document.querySelector('[data-act="sendLink"],[data-act="resendLink"]');
+  if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
+  const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + location.pathname } });
+  if (error) {
+    renderSignIn(/rate|seconds|security/i.test(error.message) ? "Too many sign-in emails in a short time. Wait a minute and try again." : error.message);
+    if ($("em")) $("em").value = email;
+    return;
+  }
+  localStorage.setItem("fit-email", email);
+  renderLinkSent(email);
+}
+function renderLinkSent(email) {
+  $("view").innerHTML = `<div class="panel setting sent" style="margin-top:8px">
+    <div class="check" aria-hidden="true">✓</div>
+    <h2>Check your email</h2>
+    <p>We sent a sign-in link to <b>${esc(email)}</b>.</p>
+    <p class="sub">Open that email on this phone and tap the link. It can take a minute; check spam if it's not there.</p>
+    <div class="actions"><button class="btn ghost" data-act="resendLink" data-email="${esc(email)}" disabled>Resend in 60s</button><button class="btn ghost" data-act="changeEmail">Use a different email</button></div></div>`;
+  let left = 60;
+  clearInterval(resendTimer);
+  resendTimer = setInterval(() => {
+    const b = document.querySelector('[data-act="resendLink"]');
+    if (!b) return clearInterval(resendTimer);
+    left--;
+    if (left <= 0) { clearInterval(resendTimer); b.disabled = false; b.textContent = "Resend link"; }
+    else b.textContent = `Resend in ${left}s`;
+  }, 1000);
 }
 
 /* ---------------- data ---------------- */
@@ -117,6 +142,22 @@ const team = () => S.teams.find((t) => t.id === S.activeTeam);
 const statusOf = (pid) => S.statuses.get(pid)?.status || "ACT";
 const P = (pid) => S.players.get(pid) || { id: pid, full_name: "Unknown player", pos: "?", team: null };
 
+/** Run a database write without waiting on it. The screen already shows the change;
+ *  if the write fails, show the error and reload the real data. */
+function bg(q) {
+  Promise.resolve(q).then((res) => { if (res && res.error) throw res.error; })
+    .catch((e) => { showError(e); refresh().catch(() => {}); });
+}
+async function ensurePlayers(ids) {
+  const need = ids.filter((id) => id && !S.players.has(id));
+  const [p, st] = await Promise.all([
+    need.length ? sb.from("nfl_players").select("id,full_name,pos,team,depth_order").in("id", need) : { data: [] },
+    ids.length ? sb.from("player_status").select("player_id,status,detail,updated_at").in("player_id", ids) : { data: [] },
+  ]);
+  (p.data || []).forEach((x) => S.players.set(x.id, x));
+  (st.data || []).forEach((x) => S.statuses.set(x.player_id, x));
+}
+
 /* ---------------- api (edge function) ---------------- */
 async function api(action, payload = {}) {
   const { data, error } = await sb.functions.invoke("api", { body: { action, ...payload } });
@@ -151,7 +192,7 @@ function renderBanner() {
 }
 
 function lineupRows(t) {
-  const filled = S.roster.filter((r) => r.team_id === t.id).sort((x, y) => x.sort - y.sort || x.created_at.localeCompare(y.created_at));
+  const filled = S.roster.filter((r) => r.team_id === t.id).sort((x, y) => (x.sort ?? 0) - (y.sort ?? 0) || String(x.created_at || "").localeCompare(String(y.created_at || "")));
   const used = new Set(), rows = [];
   for (const r of filled) { let i = r.sort; while (used.has(i) || i < 0) i++; used.add(i); rows[i] = r; }
   const n = Math.max(MIN_ROWS, rows.length) + (S.extraRows[t.id] || 0);
@@ -190,7 +231,7 @@ async function runGridSearch(i, q, slot) {
   const list = (data || []).filter((p) => !taken.has(p.id));
   box.hidden = false;
   box.innerHTML = error ? `<div class="note">${esc(error.message)}</div>` : list.length
-    ? list.map((p) => `<button class="row" data-gpick="${esc(p.id)}" data-row="${i}">${badge(S.statuses.get(p.id)?.status || "ACT", 1)}<span class="who"><span class="name">${esc(p.full_name)}</span> <span class="meta">${esc(p.pos)}, ${esc(p.team)}</span></span></button>`).join("")
+    ? list.map((p) => `<button class="row" data-gpick="${esc(p.id)}" data-gname="${esc(p.full_name)}" data-gpos="${esc(p.pos)}" data-gteam="${esc(p.team || "")}" data-row="${i}">${badge(S.statuses.get(p.id)?.status || "ACT", 1)}<span class="who"><span class="name">${esc(p.full_name)}</span> <span class="meta">${esc(p.pos)}, ${esc(p.team)}</span></span></button>`).join("")
     : `<div class="note">No ${SLOT_POS[slot] ? esc(SLOTS.find((x) => x[0] === slot)[1]) + " " : ""}players match.</div>`;
 }
 const short = (p) => { if (p.pos === "DEF") return p.full_name; const t = p.full_name.split(/\s+/).filter((x) => !/^(jr|sr|ii|iii|iv|v)\.?$/i.test(x)); return t.length > 1 ? t[t.length - 1] : p.full_name; };
@@ -338,20 +379,52 @@ function playerDlg(rosterId) {
     ${searchBox("Search a player to link")}
     <div class="actions"><button class="btn" data-act="savePlayer" data-roster="${r.id}">Save changes</button><button class="btn danger" data-act="dropPlayer" data-roster="${r.id}">Drop player</button></div><div id="dlgErr" class="err"></div>`);
   searchPick = async (lp) => {
-    const { error } = await sb.from("links").insert({ team_id: r.team_id, roster_id: r.id, player_id: lp.id, kind: $("lk").value });
-    if (error && !String(error.message).includes("duplicate")) return setErr(error.message);
-    await refresh(true); render(); playerDlg(r.id);
+    if (!S.players.has(lp.id)) S.players.set(lp.id, { id: lp.id, full_name: lp.name, pos: lp.pos, team: lp.team || null, depth_order: null });
+    const [ins] = await Promise.all([sb.from("links").insert({ team_id: r.team_id, roster_id: r.id, player_id: lp.id, kind: $("lk").value }).select().single(), ensurePlayers([lp.id])]);
+    if (ins.error && !String(ins.error.message).includes("duplicate")) return setErr(ins.error.message);
+    if (ins.data) S.links.push(ins.data);
+    render(); playerDlg(r.id);
   };
 }
 
-async function pickIntoRow(i, playerId) {
+async function pickIntoRow(i, pick) {
   const t = team();
   const slot = document.querySelector(`.slotsel[data-slotrow="${i}"]`)?.value || "BN";
-  try {
-    await api("addPlayers", { teamId: t.id, players: [{ playerId, lineupSlot: slot, sort: i }] });
-    if (S.emptySlots[t.id]) { delete S.emptySlots[t.id][i]; localStorage.setItem("fit-empty", JSON.stringify(S.emptySlots)); }
-    await refresh(true); render();
-  } catch (e) { showError(e); }
+  if (!S.players.has(pick.id)) S.players.set(pick.id, { id: pick.id, full_name: pick.name, pos: pick.pos, team: pick.team || null, depth_order: null });
+  const temp = { id: "tmp-" + Date.now(), team_id: t.id, player_id: pick.id, lineup_slot: slot, slot: slot === "BN" ? "bench" : "start", sort: i, notify: "inherit", created_at: new Date().toISOString() };
+  S.roster.push(temp);
+  if (S.emptySlots[t.id]) { delete S.emptySlots[t.id][i]; localStorage.setItem("fit-empty", JSON.stringify(S.emptySlots)); }
+  render();
+  const [ins] = await Promise.all([
+    sb.from("roster").insert({ team_id: t.id, player_id: pick.id, lineup_slot: slot, sort: i }).select().single(),
+    ensurePlayers([pick.id]),
+  ]);
+  if (ins.error) { S.roster = S.roster.filter((x) => x !== temp); render(); return showError(ins.error); }
+  Object.assign(temp, ins.data);
+  render();
+  autoLink(ins.data, S.players.get(pick.id)).catch((e) => console.warn("auto-link", e));
+}
+/** WR/TE -> his team's starting QB. RB -> his handcuff (or the starter, if he's the backup). */
+async function autoLink(r, p) {
+  if (!p?.team || !["WR", "TE", "RB"].includes(p.pos)) return;
+  const pos = p.pos === "RB" ? "RB" : "QB";
+  const { data: depth } = await sb.from("nfl_players").select("id,full_name,pos,team,depth_order").eq("team", p.team).eq("pos", pos).not("depth_order", "is", null).order("depth_order").limit(5);
+  if (!depth?.length) return;
+  let target, kind;
+  if (pos === "QB") { target = depth[0]; kind = "qb"; }
+  else {
+    const mine = depth.find((d) => d.id === p.id)?.depth_order ?? p.depth_order ?? 99;
+    const others = depth.filter((d) => d.id !== p.id);
+    target = mine <= 1 ? others[0] : (others.find((d) => d.depth_order < mine) || others[0]);
+    kind = "handcuff";
+  }
+  if (!target) return;
+  S.players.set(target.id, target);
+  const [ins] = await Promise.all([
+    sb.from("links").insert({ team_id: r.team_id, roster_id: r.id, player_id: target.id, kind }).select().single(),
+    ensurePlayers([target.id]),
+  ]);
+  if (!ins.error) { S.links.push(ins.data); render(); }
 }
 
 /* if/then rules */
@@ -441,16 +514,19 @@ document.addEventListener("click", async (e) => {
   const tb = e.target.closest("[data-team]"); if (tb) { S.activeTeam = tb.dataset.team; localStorage.setItem("fit-team", S.activeTeam); render(); return; }
   const pick = e.target.closest("[data-pick]"); if (pick && searchPick) { searchPick({ id: pick.dataset.pick, name: pick.dataset.name, pos: pick.dataset.pos, team: pick.dataset.nflteam }); return; }
   const ro = e.target.closest("button[data-ruon]"); if (ro) { ruleOn = ro.dataset.ruon; dlgBody.querySelectorAll("button[data-ruon]").forEach((b) => b.setAttribute("aria-pressed", b === ro)); rulePreview(); return; }
-  const dr = e.target.closest("[data-delrule]"); if (dr) { await sb.from("rules").delete().eq("id", dr.dataset.delrule); await refresh(true); render(); return; }
-  const gp = e.target.closest("[data-gpick]"); if (gp) { await pickIntoRow(+gp.dataset.row, gp.dataset.gpick); return; }
+  const dr = e.target.closest("[data-delrule]"); if (dr) { S.rules = S.rules.filter((x) => x.id !== dr.dataset.delrule); render(); bg(sb.from("rules").delete().eq("id", dr.dataset.delrule)); return; }
+  const gp = e.target.closest("[data-gpick]"); if (gp) { pickIntoRow(+gp.dataset.row, { id: gp.dataset.gpick, name: gp.dataset.gname, pos: gp.dataset.gpos, team: gp.dataset.gteam }); return; }
   const sg = e.target.closest("[data-seg]"); if (sg) { saveSetting({ [sg.dataset.seg]: sg.dataset.val }); return; }
-  const ul = e.target.closest("[data-unlink]"); if (ul) { await sb.from("links").delete().eq("id", ul.dataset.unlink); await refresh(true); render(); playerDlg(ul.dataset.roster); return; }
+  const ul = e.target.closest("[data-unlink]"); if (ul) { S.links = S.links.filter((x) => x.id !== ul.dataset.unlink); render(); playerDlg(ul.dataset.roster); bg(sb.from("links").delete().eq("id", ul.dataset.unlink)); return; }
   const pr = e.target.closest("button[data-roster]:not([data-act])"); if (pr) { playerDlg(pr.dataset.roster); return; }
   const a = e.target.closest("[data-act]"); if (!a) return;
   const t = team();
+  const busyTimer = setTimeout(() => a.classList.add("busy"), 120); // only show a spinner if it's actually slow
   try {
     switch (a.dataset.act) {
       case "sendLink": return sendLink();
+      case "resendLink": return sendLink(a.dataset.email);
+      case "changeEmail": return renderSignIn();
       case "closeDlg": return closeDlg();
       case "applyUpdate": S.waitingSW?.postMessage("skipWaiting"); return;
       case "enablePush": return enablePush();
@@ -460,28 +536,31 @@ document.addEventListener("click", async (e) => {
         const name = $("tn").value.trim(); if (!name) return $("tn").focus();
         const { data, error } = await sb.from("user_teams").insert({ name, sort: S.teams.length }).select().single();
         if (error) { if (String(error.message).includes("FREE_TEAM_LIMIT")) { await refresh(true); return upgradeDlg(); } return setErr(error.message); }
-        S.activeTeam = data.id; localStorage.setItem("fit-team", data.id);
-        await refresh(true); closeDlg(); location.hash = "teams"; render(); return;
+        S.teams.push(data); S.activeTeam = data.id; localStorage.setItem("fit-team", data.id);
+        closeDlg(); location.hash = "teams"; render(); return;
       }
       case "teamSettings": return teamSettingsDlg();
       case "saveTeamSettings": {
         const name = $("tn").value.trim() || t.name;
-        const { error } = await sb.from("user_teams").update({ name, notify: $("tnot").value }).eq("id", t.id);
-        if (error) return setErr(error.message);
-        await refresh(true); closeDlg(); render(); return;
+        const notify = $("tnot").value;
+        Object.assign(t, { name, notify }); closeDlg(); render();
+        bg(sb.from("user_teams").update({ name, notify }).eq("id", t.id)); return;
       }
       case "deleteTeam":
         if (!confirm(`Delete ${t.name}? Its players and links will be removed.`)) return;
-        await sb.from("user_teams").delete().eq("id", t.id); await refresh(true); closeDlg(); render(); return;
+        S.teams = S.teams.filter((x) => x.id !== t.id); S.roster = S.roster.filter((x) => x.team_id !== t.id);
+        S.links = S.links.filter((x) => x.team_id !== t.id); S.rules = S.rules.filter((x) => x.team_id !== t.id);
+        S.activeTeam = S.teams[0]?.id || null; closeDlg(); render();
+        bg(sb.from("user_teams").delete().eq("id", t.id)); return;
       case "addPlayer": return addPlayerDlg();
       case "addRule": return ruleDlg(a.dataset.trigger);
       case "addRow": { S.extraRows[t.id] = (S.extraRows[t.id] || 0) + 1; localStorage.setItem("fit-extra", JSON.stringify(S.extraRows)); render(); document.querySelector(".lrow:last-of-type .gq")?.focus(); return; }
       case "saveRule": {
         const row = { team_id: t.id, trigger_player_id: $("ruT").value, on_status: ruleOn, start_player_id: $("ruA").value, over_player_id: $("ruB").value, expires_at: nextTuesday().toISOString() };
         if (row.start_player_id === row.over_player_id) return setErr("Pick two different players.");
-        const { error } = await sb.from("rules").insert(row);
+        const { data, error } = await sb.from("rules").insert(row).select().single();
         if (error) return setErr(error.message);
-        await refresh(true); closeDlg(); render();
+        S.rules.push(data); closeDlg(); render();
         return toast("Rule saved", "You'll get one alert when it triggers.");
       }
       case "addAs": {
@@ -492,14 +571,15 @@ document.addEventListener("click", async (e) => {
         return row ? playerDlg(row.id) : closeDlg();
       }
       case "savePlayer": {
-        const { error } = await sb.from("roster").update({ notify: $("pnot").value }).eq("id", a.dataset.roster);
-        if (error) return setErr(error.message);
-        await refresh(true); closeDlg(); render(); return;
+        const notify = $("pnot").value, r = S.roster.find((x) => x.id === a.dataset.roster);
+        if (r) r.notify = notify; closeDlg(); render();
+        bg(sb.from("roster").update({ notify }).eq("id", a.dataset.roster)); return;
       }
       case "dropPlayer": {
         const r = S.roster.find((x) => x.id === a.dataset.roster);
         if (!confirm(`Drop ${P(r.player_id).full_name} from ${t.name}?`)) return;
-        await sb.from("roster").delete().eq("id", r.id); await refresh(true); closeDlg(); render(); return;
+        S.roster = S.roster.filter((x) => x.id !== r.id); S.links = S.links.filter((x) => x.roster_id !== r.id);
+        closeDlg(); render(); bg(sb.from("roster").delete().eq("id", r.id)); return;
       }
       case "testPush": {
         const r = await api("testPush");
@@ -518,10 +598,11 @@ document.addEventListener("click", async (e) => {
       case "signOut": await sb.auth.signOut(); return;
     }
   } catch (err) { if (a) a.disabled = false; dlg.open && $("dlgErr") ? setErr(err.message) : showError(err); }
+  finally { clearTimeout(busyTimer); a.classList.remove("busy"); }
 });
 document.addEventListener("input", (e) => {
   const el = e.target;
-  if (el.classList.contains("gq")) { clearTimeout(searchTimer); const i = +el.dataset.row, v = el.value; const slot = document.querySelector(`.slotsel[data-slotrow="${i}"]`).value; searchTimer = setTimeout(() => runGridSearch(i, v, slot), 250); return; }
+  if (el.classList.contains("gq")) { clearTimeout(searchTimer); const i = +el.dataset.row, v = el.value; const slot = document.querySelector(`.slotsel[data-slotrow="${i}"]`).value; searchTimer = setTimeout(() => runGridSearch(i, v, slot), 180); return; }
   if (el.id === "q") { clearTimeout(searchTimer); const v = el.value; searchTimer = setTimeout(() => runSearch(v), 250); }
   else if (el.dataset.range) { const o = $("txOut"); if (o) o.textContent = "T-" + el.value; }
 });
@@ -529,7 +610,7 @@ document.addEventListener("change", async (e) => {
   const el = e.target;
   if (el.classList.contains("slotsel")) {
     const i = +el.dataset.slotrow, t = team();
-    if (el.dataset.rid) { const { error } = await sb.from("roster").update({ lineup_slot: el.value }).eq("id", el.dataset.rid); if (error) return showError(error); await refresh(true); render(); }
+    if (el.dataset.rid) { const r = S.roster.find((x) => x.id === el.dataset.rid); if (r) { r.lineup_slot = el.value; r.slot = el.value === "BN" ? "bench" : "start"; } bg(sb.from("roster").update({ lineup_slot: el.value }).eq("id", el.dataset.rid)); }
     else { (S.emptySlots[t.id] ||= {})[i] = el.value; localStorage.setItem("fit-empty", JSON.stringify(S.emptySlots)); const q = document.querySelector(`.gq[data-row="${i}"]`); if (q?.value) runGridSearch(i, q.value, el.value); }
     return;
   }
@@ -537,7 +618,7 @@ document.addEventListener("change", async (e) => {
   else if (el.dataset.range) saveSetting({ [el.dataset.range]: +el.value });
   else if (el.dataset.time && el.value) saveSetting({ [el.dataset.time]: el.value });
   else if (["ruT", "ruA", "ruB"].includes(el.id)) rulePreview();
-  else if (el.dataset.linknotify) { await sb.from("links").update({ notify: el.value }).eq("id", el.dataset.linknotify); await refresh(true); render(); }
+  else if (el.dataset.linknotify) { const l = S.links.find((x) => x.id === el.dataset.linknotify); if (l) l.notify = el.value; render(); bg(sb.from("links").update({ notify: el.value }).eq("id", el.dataset.linknotify)); }
 });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;

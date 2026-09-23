@@ -127,3 +127,14 @@ dialog::backdrop{background:rgba(10,15,20,.55)}
 .gres{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:4;max-height:260px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.18)}
 .gres .row{padding:8px 10px}
 .addrow{justify-content:center;color:var(--brand);font-weight:600}
+/* snappier taps */
+button,select,input,a{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+.btn:active,.tab:active,.row:active,.pbtn:active,.seg button:active{opacity:.65}
+.busy{opacity:.6;pointer-events:none}
+.btn.busy::after{content:"";display:inline-block;width:.8em;height:.8em;margin-left:.5em;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-1px;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* sign-in sent */
+.sent{text-align:center}
+.sent .check{width:52px;height:52px;margin:6px auto 4px;border-radius:50%;border:3px solid var(--act);color:var(--act);font:700 1.7rem/46px var(--body)}
+.sent .actions{justify-content:center}
+@media (prefers-reduced-motion: reduce){.btn.busy::after{animation:none}}
