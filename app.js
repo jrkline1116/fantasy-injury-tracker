@@ -1,18 +1,18 @@
 /* Fantasy Injury Tracker — app */
 "use strict";
-const APP_VERSION = "1.5.0"; // keep in sync with sw.js VERSION
+const APP_VERSION = "1.6.0"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
 
 const STATUS = { ACT: ["Active", "A"], Q: ["Questionable", "Q"], D: ["Doubtful", "D"], O: ["Out", "O"], IR: ["Injured reserve", "IR"], SUS: ["Suspended", "SUS"] };
 const MODES = { all: "Everything", impact: "Out or cleared", off: "Off" };
-const LINK_KINDS = { qb: "QB link", handcuff: "Handcuff", custom: "Custom link" };
+const LINK_KINDS = { qb: "QB link", teammate: "Ahead of him", handcuff: "Handcuff", custom: "Custom link" };
 const PLANS_ENABLED = false; // off for now: unlimited teams for everyone. Turn on when Pro launches.
 const FREE_TEAMS = 1; // must match free_team_limit() in 002_plans.sql once plans are enabled
 const NOTIFY = { inherit: "Default", all: "Everything", impact: "Out or cleared", mute: "Muted" };
-const SLOTS = [["QB", "QB"], ["RB", "RB"], ["WR", "WR"], ["TE", "TE"], ["FLEX", "FLEX"], ["SFLEX", "S-FLEX"], ["DST", "D/ST"], ["K", "K"], ["IDP", "IDP"], ["BN", "BENCH"]];
-const SLOT_POS = { QB: ["QB"], RB: ["RB"], WR: ["WR"], TE: ["TE"], FLEX: ["RB", "WR", "TE"], SFLEX: ["QB", "RB", "WR", "TE"], DST: ["DEF"], K: ["K"], IDP: ["DL", "DE", "DT", "LB", "DB", "CB", "S"], BN: null };
+const SLOTS = [["QB", "QB"], ["RB", "RB"], ["WR", "WR"], ["TE", "TE"], ["FLEX", "FLEX"], ["SFLEX", "S-FLEX"], ["DST", "D/ST"], ["K", "K"], ["IDP", "IDP"], ["BN", "BENCH"], ["IR", "IR"]];
+const SLOT_POS = { QB: ["QB"], RB: ["RB"], WR: ["WR"], TE: ["TE"], FLEX: ["RB", "WR", "TE"], SFLEX: ["QB", "RB", "WR", "TE"], DST: ["DEF"], K: ["K"], IDP: ["DL", "DE", "DT", "LB", "DB", "CB", "S"], BN: null, IR: null };
 const DEFAULT_ROWS = ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "DST", "K", "BN", "BN", "BN", "BN", "BN", "BN"]; // 15 rows
 const MIN_ROWS = DEFAULT_ROWS.length;
 const WORD = { ACT: "ACTIVE", Q: "QUESTIONABLE", D: "DOUBTFUL", O: "OUT", IR: "IR", SUS: "SUSPENDED" };
@@ -375,7 +375,8 @@ function playerDlg(rosterId) {
       <select data-linknotify="${l.id}" aria-label="Alerts for ${esc(lp.full_name)}" style="width:auto">${["inherit", "all", "impact", "mute"].map((v) => `<option value="${v}"${l.notify === v ? " selected" : ""}>${v === "inherit" ? "Default" : v === "impact" ? "Out/cleared" : NOTIFY[v]}</option>`).join("")}</select>
       <button class="btn ghost small" data-unlink="${l.id}" data-roster="${r.id}" aria-label="Remove link to ${esc(lp.full_name)}">Remove</button></div>`; }).join("")}</div>` : `<p class="sub">None yet.</p>`}
     <label class="f">Add a link</label>
-    <select id="lk" aria-label="Link type" style="margin-bottom:8px">${Object.entries(LINK_KINDS).map(([k, v]) => `<option value="${k}"${(p.pos === "RB" ? "handcuff" : "qb") === k ? " selected" : ""}>${v}</option>`).join("")}</select>
+    <select id="lk" aria-label="Link type" style="margin-bottom:8px">${Object.entries(LINK_KINDS).map(([k, v]) => `<option value="${k}"${(p.pos === "RB" ? "teammate" : "qb") === k ? " selected" : ""}>${v}</option>`).join("")}</select>
+    <div class="hint" style="margin-top:-4px">"Ahead of him" = if that player is out, yours gets more work. "Handcuff" = the player behind yours.</div>
     ${searchBox("Search a player to link")}
     <div class="actions"><button class="btn" data-act="savePlayer" data-roster="${r.id}">Save changes</button><button class="btn danger" data-act="dropPlayer" data-roster="${r.id}">Drop player</button></div><div id="dlgErr" class="err"></div>`);
   searchPick = async (lp) => {
@@ -404,27 +405,30 @@ async function pickIntoRow(i, pick) {
   render();
   autoLink(ins.data, S.players.get(pick.id)).catch((e) => console.warn("auto-link", e));
 }
-/** WR/TE -> his team's starting QB. RB -> his handcuff (or the starter, if he's the backup). */
+/** Auto-links: WR/TE get their QB, and RB/WR/TE get the same-position player directly
+ *  ahead of them on the depth chart (or their handcuff, if yours is the starter). */
 async function autoLink(r, p) {
   if (!p?.team || !["WR", "TE", "RB"].includes(p.pos)) return;
-  const pos = p.pos === "RB" ? "RB" : "QB";
-  const { data: depth } = await sb.from("nfl_players").select("id,full_name,pos,team,depth_order").eq("team", p.team).eq("pos", pos).not("depth_order", "is", null).order("depth_order").limit(5);
+  const positions = p.pos === "RB" ? ["RB"] : ["QB", p.pos];
+  const { data: depth } = await sb.from("nfl_players").select("id,full_name,pos,team,depth_order")
+    .eq("team", p.team).in("pos", positions).not("depth_order", "is", null).order("depth_order").limit(12);
   if (!depth?.length) return;
-  let target, kind;
-  if (pos === "QB") { target = depth[0]; kind = "qb"; }
-  else {
-    const mine = depth.find((d) => d.id === p.id)?.depth_order ?? p.depth_order ?? 99;
-    const others = depth.filter((d) => d.id !== p.id);
-    target = mine <= 1 ? others[0] : (others.find((d) => d.depth_order < mine) || others[0]);
-    kind = "handcuff";
+  const targets = [];
+  if (p.pos !== "RB") { const qb = depth.find((d) => d.pos === "QB"); if (qb) targets.push([qb, "qb"]); }
+  const mates = depth.filter((d) => d.pos === p.pos && d.id !== p.id);
+  const mine = depth.find((d) => d.id === p.id)?.depth_order ?? p.depth_order ?? 99;
+  const ahead = mates.filter((d) => d.depth_order < mine).pop();
+  const behind = mates.find((d) => d.depth_order > mine);
+  if (ahead) targets.push([ahead, "teammate"]);
+  else if (behind) targets.push([behind, "handcuff"]);
+  for (const [target, kind] of targets) {
+    S.players.set(target.id, target);
+    const [ins] = await Promise.all([
+      sb.from("links").insert({ team_id: r.team_id, roster_id: r.id, player_id: target.id, kind }).select().single(),
+      ensurePlayers([target.id]),
+    ]);
+    if (!ins.error) { S.links.push(ins.data); render(); }
   }
-  if (!target) return;
-  S.players.set(target.id, target);
-  const [ins] = await Promise.all([
-    sb.from("links").insert({ team_id: r.team_id, roster_id: r.id, player_id: target.id, kind }).select().single(),
-    ensurePlayers([target.id]),
-  ]);
-  if (!ins.error) { S.links.push(ins.data); render(); }
 }
 
 /* if/then rules */

@@ -270,13 +270,14 @@ export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; tes
         if (!wants(level(st, t, r, l), ch.from, ch.to)) continue;
         const [trig, f] = names(pl, fp);
         const starting = r.slot === "start";
-        if (l.kind === "handcuff") {
-          const triggerIsStarter = (pl.depth_order ?? 99) < (fp.depth_order ?? 99);
-          if (!triggerIsStarter) continue; // a backup's status doesn't change your player's role
-          if (m.out) { if (!st.upside) continue; add(`→ ${f} UPGRADE · ${starting ? "keep him in" : "start him"}`); }
+        if (l.kind === "handcuff" || l.kind === "teammate") {
+          const ahead = (pl.depth_order ?? 99) < (fp.depth_order ?? 99);
+          if (!ahead) continue; // a player behind yours doesn't change your player's role
+          const gain = fp.pos === "RB" ? "more work" : fp.pos === "QB" ? "the start" : "more targets";
+          if (m.out) { if (!st.upside) continue; add(`→ ${f} UPGRADE · ${gain}, ${starting ? "keep him in" : "consider starting"}`); }
           else if (m.clear) add(`→ ${f} DOWNGRADE · ${starting ? "consider benching" : "keep him benched"}`);
           else if (m.up) add(`→ ${f} WATCH · ${trig} trending up, still ${lower(ch.to)}`);
-          else if (m.down) add(`→ ${f} WATCH · ${trig} ${lower(ch.to)}, could open up work`);
+          else if (m.down) add(`→ ${f} WATCH · ${trig} ${lower(ch.to)}, could open up ${gain}`);
         } else {
           if (m.out) add(`→ ${f} DOWNGRADE · ${starting ? "consider benching" : "keep him benched"}`);
           else if (m.clear) add(`→ ${f} UPGRADE · ${starting ? "good to go" : "consider starting"}`);
@@ -399,7 +400,7 @@ export async function addPlayersToTeam(admin: Admin, team: { id: string; user_id
   const nflTeams = [...new Set((pl ?? []).filter((p) => p.team && ["WR", "TE", "RB"].includes(p.pos)).map((p) => p.team))];
   if (!nflTeams.length) return ins;
   const { data: depth } = await admin.from("nfl_players").select("id,pos,team,depth_order")
-    .in("team", nflTeams).in("pos", ["QB", "RB"]).not("depth_order", "is", null).order("depth_order");
+    .in("team", nflTeams).in("pos", ["QB", "RB", "WR", "TE"]).not("depth_order", "is", null).order("depth_order");
   const linkRows: Record<string, unknown>[] = [];
   for (const r of ins) {
     const p = (pl ?? []).find((x) => x.id === r.player_id);
@@ -407,11 +408,14 @@ export async function addPlayersToTeam(admin: Admin, team: { id: string; user_id
     if (p.pos === "WR" || p.pos === "TE") {
       const qb = (depth ?? []).find((d) => d.team === p.team && d.pos === "QB");
       if (qb) linkRows.push({ user_id: team.user_id, team_id: team.id, roster_id: r.id, player_id: qb.id, kind: "qb" });
-    } else if (p.pos === "RB") {
-      const rbs = (depth ?? []).filter((d) => d.team === p.team && d.pos === "RB" && d.id !== p.id);
+    }
+    if (["RB", "WR", "TE"].includes(p.pos)) {
+      const mates = (depth ?? []).filter((d) => d.team === p.team && d.pos === p.pos && d.id !== p.id);
       const mine = p.depth_order ?? 99;
-      const target = mine <= 1 ? rbs[0] : (rbs.find((d) => (d.depth_order ?? 99) < mine) ?? rbs[0]);
-      if (target) linkRows.push({ user_id: team.user_id, team_id: team.id, roster_id: r.id, player_id: target.id, kind: "handcuff" });
+      const ahead = mates.filter((d) => (d.depth_order ?? 99) < mine).pop();     // the one directly ahead
+      const behind = mates.find((d) => (d.depth_order ?? 99) > mine);            // his handcuff
+      const target = ahead ?? behind;
+      if (target) linkRows.push({ user_id: team.user_id, team_id: team.id, roster_id: r.id, player_id: target.id, kind: ahead ? "teammate" : "handcuff" });
     }
   }
   if (linkRows.length) await admin.from("links").upsert(linkRows, { onConflict: "roster_id,player_id", ignoreDuplicates: true });
