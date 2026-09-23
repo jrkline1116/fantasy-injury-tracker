@@ -105,7 +105,10 @@ async function syncPlayers(admin: Admin) {
     rows.push({
       id: String(p.player_id), full_name: full, search_name: normName(full), pos, team: p.team ?? null,
       depth_order: depthOk ? (p.depth_chart_order ?? null) : (pos === "QB" || pos === "RB" ? (p.depth_chart_order ?? null) : null),
-      espn_id: p.espn_id ? String(p.espn_id) : null, updated_at: new Date().toISOString(),
+      espn_id: p.espn_id ? String(p.espn_id) : null,
+      // Sleeper knows about IR / PUP / NFI / suspensions that ESPN's injury feed leaves out
+      sleeper_status: mapStatus(p.injury_status ?? (p.status && p.status !== "Active" ? p.status : null)),
+      updated_at: new Date().toISOString(),
     });
   }
   for (let i = 0; i < rows.length; i += 500) {
@@ -158,8 +161,8 @@ async function pollInjuries(admin: Admin, now: Date, firstRun: boolean) {
   const entries = extractInjuries(await espnJson(ESPN_INJURIES));
   if (entries.length < 50) throw new Error(`injury feed looked incomplete (${entries.length} entries); skipped`);
 
-  const players = await fetchAll<{ id: string; espn_id: string | null; search_name: string; team: string | null }>(
-    (a, b) => admin.from("nfl_players").select("id,espn_id,search_name,team").order("id").range(a, b));
+  const players = await fetchAll<{ id: string; espn_id: string | null; search_name: string; team: string | null; sleeper_status: string | null }>(
+    (a, b) => admin.from("nfl_players").select("id,espn_id,search_name,team,sleeper_status").order("id").range(a, b));
   const byEspn = new Map<string, string>();
   const byName = new Map<string, { id: string; team: string | null }[]>();
   for (const p of players) {
@@ -180,6 +183,12 @@ async function pollInjuries(admin: Admin, now: Date, firstRun: boolean) {
     if (code === "ACT") continue;
     const prev = next.get(pid);
     if (!prev || rank[code] > rank[prev.status]) next.set(pid, { status: code, detail: e.detail });
+  }
+
+  // players ESPN doesn't list but Sleeper says are unavailable long-term
+  for (const p of players) {
+    if (!p.sleeper_status || !["IR", "SUS"].includes(p.sleeper_status)) continue;
+    if (!next.has(p.id)) next.set(p.id, { status: p.sleeper_status, detail: null });
   }
 
   const current = await fetchAll<{ player_id: string; status: string }>(
