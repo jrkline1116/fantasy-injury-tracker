@@ -1,6 +1,6 @@
 /* Fantasy Injury Tracker — app */
 "use strict";
-const APP_VERSION = "1.6.0"; // keep in sync with sw.js VERSION
+const APP_VERSION = "1.8.0"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -209,13 +209,26 @@ function viewTeams() {
       <button class="row addrow" data-act="addRow">+ Add another player</button></div>
     <div class="actions"><button class="btn ghost" data-act="addRule">Add if/then rule</button><button class="btn ghost" data-act="teamSettings">Team settings</button></div>` + rulesSec;
 }
+/** The most useful line of news for this row: his own if he's dinged,
+ *  otherwise the linked player everyone's waiting on (Bigsby -> Barkley). */
+function rowNote(r, p, st) {
+  if (st && st.status !== "ACT" && st.detail) return `<span class="rnote">${esc(trim(st.detail))}</span>`;
+  const hurt = S.links.filter((l) => l.roster_id === r.id).map((l) => [l, S.statuses.get(l.player_id)])
+    .filter(([, s]) => s && s.status !== "ACT" && s.detail)
+    .sort(([, a], [, b]) => String(b.updated_at).localeCompare(String(a.updated_at)))[0];
+  if (!hurt) return "";
+  const lp = P(hurt[0].player_id);
+  return `<span class="rnote">${esc(short(lp))}: ${esc(trim(hurt[1].detail))}</span>`;
+}
+const trim = (t) => (t.length > 110 ? t.slice(0, 107).replace(/[\s,;:]+$/, "") + "…" : t);
 function rowLineup({ i, r, slot }) {
   const sel = `<select class="slotsel" data-slotrow="${i}" data-rid="${r ? r.id : ""}" aria-label="Lineup slot">${SLOTS.map(([v, l]) => `<option value="${v}"${v === slot ? " selected" : ""}>${l}</option>`).join("")}</select>`;
   if (!r) return `<div class="lrow">${sel}<div class="lname"><input type="search" class="gq" data-row="${i}" placeholder="Add player" autocomplete="off" aria-label="Player name"><div class="gres panel" id="gres${i}" hidden></div></div><span class="lst"></span></div>`;
-  const p = P(r.player_id), st = statusOf(p.id);
+  const p = P(r.player_id), st = statusOf(p.id), full = S.statuses.get(p.id);
   const links = S.links.filter((l) => l.roster_id === r.id);
   return `<div class="lrow">${sel}<div class="lname"><button class="pbtn" data-roster="${r.id}"><span class="name">${esc(p.full_name)}</span> <span class="meta">${esc(p.pos)}, ${esc(p.team || "FA")}</span>
-      ${links.length ? `<span class="lk">${links.map((l) => { const lp = P(l.player_id); return `↳ ${esc(short(lp))} ${statusOf(lp.id) !== "ACT" ? `(${esc(WORD[statusOf(lp.id)])})` : ""}`; }).join(" · ")}</span>` : ""}</button></div>
+      ${links.length ? `<span class="lk">${links.map((l) => { const lp = P(l.player_id); return `↳ ${esc(short(lp))} ${statusOf(lp.id) !== "ACT" ? `(${esc(WORD[statusOf(lp.id)])})` : ""}`; }).join(" · ")}</span>` : ""}
+      ${rowNote(r, p, full)}</button></div>
     <span class="lst">${badge(st)}</span></div>`;
 }
 async function runGridSearch(i, q, slot) {
@@ -235,6 +248,11 @@ async function runGridSearch(i, q, slot) {
     : `<div class="note">No ${SLOT_POS[slot] ? esc(SLOTS.find((x) => x[0] === slot)[1]) + " " : ""}players match.</div>`;
 }
 const short = (p) => { if (p.pos === "DEF") return p.full_name; const t = p.full_name.split(/\s+/).filter((x) => !/^(jr|sr|ii|iii|iv|v)\.?$/i.test(x)); return t.length > 1 ? t[t.length - 1] : p.full_name; };
+function noteBlock(pid) {
+  const st = S.statuses.get(pid);
+  if (!st?.detail) return "";
+  return `<div class="pnote">${esc(st.detail)}<span class="when">Updated ${esc(when(st.updated_at))}</span></div>`;
+}
 function ruleText(rule) {
   const tp = P(rule.trigger_player_id), a = P(rule.start_player_id), b = P(rule.over_player_id);
   return `If <b>${esc(short(tp))}</b> is ${rule.on_status === "active" ? "ACTIVE" : "OUT"} → start <b>${esc(short(a))}</b> over <b>${esc(short(b))}</b>`;
@@ -265,7 +283,7 @@ function viewAlerts() {
     </div>`;
   const list = S.alerts.length
     ? `<div class="panel">${S.alerts.map((a) => `<div class="alert"><div class="head">${a.status ? badge(a.status, 1) : `<span class="st T sm">${a.kind === "pregame" ? "T-" : a.kind === "bye" ? "BYE" : a.kind === "roster" ? "SYNC" : "TEST"}</span>`}<span class="ttl">${esc(a.title)}</span><span class="time">${esc(when(a.created_at))}</span></div>
-        <ul>${(a.lines || []).map((l) => `<li>${S.teams.length > 1 ? `<span class="tm">${esc(l.team)}:</span> ` : ""}${esc(l.text)}</li>`).join("")}</ul>
+        <ul>${(a.lines || []).map((l) => `<li>${l.team ? `<span class="tm">${esc(l.team)}:</span> ` : ""}${esc(l.text)}</li>`).join("")}</ul>
         ${a.held_until && !a.pushed_at ? `<div class="held">Held until ${esc(new Date(a.held_until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))} for quiet hours</div>` : ""}</div>`).join("")}</div>
        <div class="actions"><button class="btn ghost small" data-act="clearAlerts">Clear alert history</button></div>`
     : `<p class="sub">No alerts yet. They'll show up here as well as on your phone.</p>`;
@@ -366,14 +384,15 @@ function playerDlg(rosterId) {
   const r = S.roster.find((x) => x.id === rosterId); if (!r) return closeDlg();
   const p = P(r.player_id), st = S.statuses.get(p.id);
   const links = S.links.filter((l) => l.roster_id === r.id);
-  openDlg(`<h3>${esc(p.full_name)}</h3><p class="sub">${esc(p.pos)}, ${esc(p.team || "FA")}. ${esc(stLabel(st?.status || "ACT"))}${st?.detail ? `: ${esc(st.detail)}` : ""}.</p>
+  openDlg(`<h3>${esc(p.full_name)}</h3><p class="sub">${esc(p.pos)}, ${esc(p.team || "FA")} · ${badge(st?.status || "ACT", 1)} ${esc(stLabel(st?.status || "ACT"))}</p>
+    ${noteBlock(p.id)}
     <div><div><label class="f" for="pnot">Alerts for him</label>${notifySelect("pnot", r.notify, ["inherit", "all", "impact", "mute"], "Use team setting")}</div></div>
     ${r.slot === "bench" && ["Q", "D"].includes(st?.status) ? `<div class="bannerbox" style="margin-top:12px"><span>He's ${esc(stLabel(st.status))} on your bench. Get told who to swap if he's cleared?</span><button class="btn small" data-act="addRule" data-trigger="${esc(p.id)}">Set rule</button></div>`
       : `<div class="actions"><button class="btn ghost small" data-act="addRule" data-trigger="${esc(p.id)}">Add if/then rule</button></div>`}
-    <h2>Linked players</h2>
-    ${links.length ? `<div class="panel">${links.map((l) => { const lp = P(l.player_id); return `<div class="row"><span class="who"><span class="name">${esc(lp.full_name)}</span><br><span class="meta">${esc(lp.pos)}, ${esc(lp.team || "FA")}, ${esc(LINK_KINDS[l.kind].toLowerCase())}</span></span>
-      <select data-linknotify="${l.id}" aria-label="Alerts for ${esc(lp.full_name)}" style="width:auto">${["inherit", "all", "impact", "mute"].map((v) => `<option value="${v}"${l.notify === v ? " selected" : ""}>${v === "inherit" ? "Default" : v === "impact" ? "Out/cleared" : NOTIFY[v]}</option>`).join("")}</select>
-      <button class="btn ghost small" data-unlink="${l.id}" data-roster="${r.id}" aria-label="Remove link to ${esc(lp.full_name)}">Remove</button></div>`; }).join("")}</div>` : `<p class="sub">None yet.</p>`}
+    <h2>Why you're watching</h2>
+    ${links.length ? `<div class="panel">${links.map((l) => { const lp = P(l.player_id); return `<div class="row linkrow"><span class="who"><span class="name">${badge(statusOf(lp.id), 1)} ${esc(lp.full_name)}</span><br><span class="meta">${esc(lp.pos)}, ${esc(lp.team || "FA")}, ${esc(LINK_KINDS[l.kind].toLowerCase())}</span>${noteBlock(lp.id)}
+      </span><select data-linknotify="${l.id}" aria-label="Alerts for ${esc(lp.full_name)}" style="width:auto">${["inherit", "all", "impact", "mute"].map((v) => `<option value="${v}"${l.notify === v ? " selected" : ""}>${v === "inherit" ? "Default" : v === "impact" ? "Out/cleared" : NOTIFY[v]}</option>`).join("")}</select>
+      <button class="btn ghost small" data-unlink="${l.id}" data-roster="${r.id}" aria-label="Remove link to ${esc(lp.full_name)}">Remove</button></div>`; }).join("")}</div>` : `<p class="sub">No linked players yet. Add the QB, the back ahead of him, or anyone whose status changes his value.</p>`}
     <label class="f">Add a link</label>
     <select id="lk" aria-label="Link type" style="margin-bottom:8px">${Object.entries(LINK_KINDS).map(([k, v]) => `<option value="${k}"${(p.pos === "RB" ? "teammate" : "qb") === k ? " selected" : ""}>${v}</option>`).join("")}</select>
     <div class="hint" style="margin-top:-4px">"Ahead of him" = if that player is out, yours gets more work. "Handcuff" = the player behind yours.</div>

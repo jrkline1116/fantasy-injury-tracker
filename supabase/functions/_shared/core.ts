@@ -292,7 +292,7 @@ export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; tes
       const held = isOut || e.urgent || opts.test ? null : quietHoldUntil(st, opts.now);
       out.push({
         user_id: uid, kind: opts.test ? "test" : "status", status: ch.to,
-        title: `${opts.test ? "Test: " : ""}${shortName(pl)} ${word(ch.from)} → ${word(ch.to)}`,
+        title: `${opts.test ? "Test: " : ""}${shortName(pl)} ${pl.pos}, ${pl.team ?? "FA"} · ${word(ch.from)} → ${word(ch.to)}`,
         lines: e.lines,
         dedupe_key: opts.test ? `test:${crypto.randomUUID()}` : `status:${uid}:${ch.playerId}:${ch.eventId ?? Date.now()}`,
         held_until: held ? held.toISOString() : null, push: true,
@@ -368,8 +368,7 @@ export async function sendPush(admin: Admin, userId: string, payload: Record<str
 }
 
 export async function pushAlert(admin: Admin, a: { id: string; user_id: string; kind: string; title: string; lines: Line[] }) {
-  const multi = new Set(a.lines.map((l) => l.team)).size > 1;
-  const body = a.lines.map((l) => (multi ? `${l.team}: ${l.text}` : l.text)).join("\n");
+  const body = a.lines.map((l) => (l.team ? `${l.team}: ${l.text}` : l.text)).join("\n");
   const sent = await sendPush(admin, a.user_id, { title: a.title, body, tag: a.kind === "pregame" ? "pregame" : a.id, url: "./#alerts" });
   await admin.from("alerts").update({ pushed_at: new Date().toISOString() }).eq("id", a.id);
   return sent;
