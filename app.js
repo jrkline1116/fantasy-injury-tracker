@@ -1,6 +1,6 @@
 /* Fantasy Injury Tracker — app */
 "use strict";
-const APP_VERSION = "1.8.0"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.0.0"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -25,7 +25,7 @@ const norm = (s) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,
 
 const S = {
   session: null, settings: null, teams: [], roster: [], links: [], rules: [], emptySlots: JSON.parse(localStorage.getItem("fit-empty") || "{}"), extraRows: JSON.parse(localStorage.getItem("fit-extra") || "{}"), players: new Map(), statuses: new Map(), alerts: [],
-  plan: "free", activeTeam: localStorage.getItem("fit-team"), view: (location.hash || "#teams").slice(1), pushState: "unknown", loaded: false,
+  plan: "free", activeTeam: localStorage.getItem("fit-team"), leagueMeta: {}, pendingJoin: null, view: (location.hash || "#teams").slice(1), pushState: "unknown", loaded: false,
 };
 
 /* ---------------- boot ---------------- */
@@ -42,7 +42,14 @@ if (!CONFIGURED) {
   });
   sb.auth.getSession().then(({ data }) => { S.session = data.session; if (!data.session) renderSignIn(); else loadAll(); });
 }
-window.addEventListener("hashchange", () => { S.view = (location.hash || "#teams").slice(1); if (S.loaded) render(); });
+function readHash() {
+  const h = (location.hash || "#teams").slice(1);
+  const m = h.match(/^join=([A-Za-z0-9]+)/);
+  if (m) { S.pendingJoin = m[1]; history.replaceState(null, "", location.pathname + "#teams"); S.view = "teams"; }
+  else S.view = h;
+}
+readHash();
+window.addEventListener("hashchange", () => { readHash(); if (S.loaded) { render(); if (S.pendingJoin) joinDlg(); } });
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.loaded && !userBusy()) refresh(); });
 const userBusy = () => dlg.open || ["INPUT", "SELECT"].includes(document.activeElement?.tagName);
 setInterval(() => { if (document.visibilityState === "visible" && S.loaded && !userBusy()) refresh(); }, 60000);
@@ -98,6 +105,7 @@ async function loadAll() {
     S.loaded = true;
     await checkPush();
     render();
+    if (S.pendingJoin) joinDlg();
   } catch (e) { showError(e); }
 }
 async function ensureSettings() {
@@ -191,11 +199,31 @@ function renderBanner() {
   b.innerHTML = "";
 }
 
+const synced = (t) => !!t?.league_team_id;
+const PLATFORM = { espn: "ESPN", sleeper: "Sleeper", yahoo: "Yahoo" };
+async function loadLeagueMeta(t, force) {
+  if (!synced(t) || (S.leagueMeta[t.id] && !force)) return;
+  S.leagueMeta[t.id] = { loading: true };
+  try { S.leagueMeta[t.id] = await api("leagueInfo", { teamId: t.id }) || { missing: true }; }
+  catch (e) { S.leagueMeta[t.id] = { error: e.message }; }
+  if (team()?.id === t.id && S.view === "teams" && !userBusy()) render();
+}
+function syncBar(t) {
+  const m = S.leagueMeta[t.id];
+  if (!m || m.loading) { loadLeagueMeta(t); return `<div class="syncbar">Synced from your league…</div>`; }
+  if (m.error || m.missing) return `<div class="syncbar warn">Couldn't load league info. <button class="linkbtn" data-act="syncNow">Try again</button></div>`;
+  if (m.status === "reconnect") return `<div class="syncbar warn">${m.isLinker ? `${esc(PLATFORM[m.platform])} needs you to reconnect.` : "Sync paused: the league's ESPN login expired."} <button class="linkbtn" data-act="teamSettings">${m.isLinker ? "Reconnect" : "Details"}</button></div>`;
+  return `<div class="syncbar">Synced from ${esc(PLATFORM[m.platform])} · ${esc(m.leagueName)} · ${m.syncedAt ? esc(ago(m.syncedAt)) : "just now"} <button class="linkbtn" data-act="syncNow">Sync now</button>${m.unmatched?.length ? `<br><span class="warn">${m.unmatched.length} player${m.unmatched.length === 1 ? "" : "s"} couldn't be matched: ${esc(m.unmatched.join(", "))}</span>` : ""}</div>`;
+}
+function ago(ts) {
+  const m = Math.round((Date.now() - new Date(ts).getTime()) / 60000);
+  return m < 2 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} hr ago` : `${Math.round(m / 1440)} days ago`;
+}
 function lineupRows(t) {
   const filled = S.roster.filter((r) => r.team_id === t.id).sort((x, y) => (x.sort ?? 0) - (y.sort ?? 0) || String(x.created_at || "").localeCompare(String(y.created_at || "")));
   const used = new Set(), rows = [];
   for (const r of filled) { let i = r.sort; while (used.has(i) || i < 0) i++; used.add(i); rows[i] = r; }
-  const n = Math.max(MIN_ROWS, rows.length) + (S.extraRows[t.id] || 0);
+  const n = synced(t) ? rows.length : Math.max(MIN_ROWS, rows.length) + (S.extraRows[t.id] || 0);
   const empty = S.emptySlots[t.id] || {};
   return Array.from({ length: n }, (_, i) => rows[i] ? { i, r: rows[i], slot: rows[i].lineup_slot } : { i, r: null, slot: empty[i] || DEFAULT_ROWS[i] || "BN" });
 }
@@ -205,8 +233,9 @@ function viewTeams() {
     <div class="actions" style="justify-content:center"><button class="btn" data-act="newTeam">Add a team</button></div></div>`;
   const rules = S.rules.filter((x) => x.team_id === t.id);
   const rulesSec = rules.length ? `<h2>If/then rules this week</h2><div class="panel">${rules.map(rowRule).join("")}</div>` : "";
-  return `<div class="panel lineup">${lineupRows(t).map(rowLineup).join("")}
-      <button class="row addrow" data-act="addRow">+ Add another player</button></div>
+  const rows = lineupRows(t).filter((x) => !synced(t) || x.r);
+  return (synced(t) ? syncBar(t) : "") + `<div class="panel lineup${synced(t) ? " locked" : ""}">${rows.map(rowLineup).join("") || `<div class="note">No players yet. Tap Sync now after your league drafts.</div>`}
+      ${synced(t) ? "" : `<button class="row addrow" data-act="addRow">+ Add another player</button>`}</div>
     <div class="actions"><button class="btn ghost" data-act="addRule">Add if/then rule</button><button class="btn ghost" data-act="teamSettings">Team settings</button></div>` + rulesSec;
 }
 /** The most useful line of news for this row: his own if he's dinged,
@@ -222,7 +251,7 @@ function rowNote(r, p, st) {
 }
 const trim = (t) => (t.length > 110 ? t.slice(0, 107).replace(/[\s,;:]+$/, "") + "…" : t);
 function rowLineup({ i, r, slot }) {
-  const sel = `<select class="slotsel" data-slotrow="${i}" data-rid="${r ? r.id : ""}" aria-label="Lineup slot">${SLOTS.map(([v, l]) => `<option value="${v}"${v === slot ? " selected" : ""}>${l}</option>`).join("")}</select>`;
+  const sel = `<select class="slotsel" data-slotrow="${i}" data-rid="${r ? r.id : ""}" aria-label="Lineup slot"${synced(team()) ? " disabled" : ""}>${SLOTS.map(([v, l]) => `<option value="${v}"${v === slot ? " selected" : ""}>${l}</option>`).join("")}</select>`;
   if (!r) return `<div class="lrow">${sel}<div class="lname"><input type="search" class="gq" data-row="${i}" placeholder="Add player" autocomplete="off" aria-label="Player name"><div class="gres panel" id="gres${i}" hidden></div></div><span class="lst"></span></div>`;
   const p = P(r.player_id), st = statusOf(p.id), full = S.statuses.get(p.id);
   const links = S.links.filter((l) => l.roster_id === r.id);
@@ -338,6 +367,15 @@ function upgradeDlg() {
 }
 function newTeamDlg() {
   if (!canAddTeam()) return upgradeDlg();
+  openDlg(`<h3>Add a team</h3><p class="sub">Linked teams stay in sync automatically: trades, pickups, and lineup moves.</p>
+    <div class="actions" style="flex-direction:column;align-items:stretch">
+      <button class="btn" data-act="linkEspn">Link an ESPN league</button>
+      <button class="btn" data-act="linkSleeper">Link a Sleeper league</button>
+      <button class="btn ghost" data-act="joinManual">Join with an invite link</button>
+      <button class="btn ghost" data-act="manualTeam">Enter a team by hand</button>
+    </div>`);
+}
+function manualTeamDlg() {
   openDlg(`<h3>New team</h3><p class="sub">Name it after the league so alerts are easy to tell apart.</p>
     <label class="f" for="tn">Team name</label><input type="text" id="tn" placeholder="Work league" maxlength="40">
     <div class="actions"><button class="btn" data-act="saveTeam">Create team</button></div><div id="dlgErr" class="err"></div>`);
@@ -345,11 +383,83 @@ function newTeamDlg() {
 }
 function teamSettingsDlg() {
   const t = team();
+  if (synced(t)) return syncedSettingsDlg(t);
   openDlg(`<h3>Team settings</h3>
     <label class="f" for="tn">Team name</label><input type="text" id="tn" value="${esc(t.name)}" maxlength="40">
     <label class="f" for="tnot">Alerts for this team</label>${notifySelect("tnot", t.notify, ["inherit", "all", "impact", "off"], `Use default (${MODES[S.settings.mode]})`)}
     <div class="actions"><button class="btn" data-act="saveTeamSettings">Save changes</button><button class="btn danger" data-act="deleteTeam">Delete team</button></div><div id="dlgErr" class="err"></div>`);
 }
+
+async function syncedSettingsDlg(t) {
+  openDlg(`<h3>Team settings</h3><p class="sub">Loading league…</p>`);
+  await loadLeagueMeta(t, true);
+  const m = S.leagueMeta[t.id] || {};
+  openDlg(`<h3>Team settings</h3>
+    <label class="f" for="tn">Team name in this app</label><input type="text" id="tn" value="${esc(t.name)}" maxlength="40">
+    <label class="f" for="tnot">Alerts for this team</label>${notifySelect("tnot", t.notify, ["inherit", "all", "impact", "off"], `Use default (${MODES[S.settings.mode]})`)}
+    <div class="actions"><button class="btn" data-act="saveTeamSettings">Save changes</button></div>
+    <h2>League sync</h2>
+    <div class="panel note">${esc(PLATFORM[m.platform] || "")} · ${esc(m.leagueName || "")} · your team: ${esc(m.teamName || "")}<br>
+      ${m.status === "reconnect" ? `<span class="warn">${esc(m.lastError || "Needs reconnecting.")}</span>` : m.status === "error" ? `<span class="warn">Last sync failed: ${esc(m.lastError || "")}</span>` : `Last synced ${m.syncedAt ? esc(ago(m.syncedAt)) : "never"}.`}</div>
+    <div class="actions"><button class="btn ghost small" data-act="syncNow">Sync now</button>
+      ${m.isLinker && m.platform === "espn" ? `<button class="btn ghost small" data-act="reconnectEspn" data-ext="${esc(m.externalId)}">Update ESPN cookies</button>` : ""}</div>
+    ${m.isLinker ? `<h2>Invite your league</h2><p class="sub">Anyone in ${esc(m.leagueName)} can open this link, sign in, and claim their team. No ESPN cookies needed on their end.</p>
+      <div class="actions"><button class="btn small" data-act="shareInvite" data-code="${esc(m.inviteCode)}">Share invite link</button><button class="btn ghost small" data-act="copyInvite" data-code="${esc(m.inviteCode)}">Copy</button></div>
+      <div class="panel">${(m.claims || []).map((c) => `<div class="row"><span class="who"><span class="name">${esc(c.name)}</span><br><span class="meta">${esc(c.manager || "")}</span></span>${c.mine ? `<span class="tag">You</span>` : c.claimed ? `<button class="btn ghost small" data-act="release" data-lt="${esc(c.id)}">Release</button>` : `<span class="tag">Open</span>`}</div>`).join("")}</div>` : ""}
+    <div class="actions"><button class="btn ghost small" data-act="unlinkTeam">Stop syncing (keep as manual team)</button><button class="btn danger small" data-act="deleteTeam">Delete team</button></div>
+    <div id="dlgErr" class="err"></div>`);
+}
+
+/* ---------- league linking ---------- */
+function espnDlg(prefill = {}) {
+  openDlg(`<h3>${prefill.reconnect ? "Reconnect ESPN" : "Link an ESPN league"}</h3>
+    <label class="f" for="elg">League URL</label><input type="text" id="elg" placeholder="https://fantasy.espn.com/football/league?leagueId=…" value="${esc(prefill.league || "")}" ${prefill.reconnect ? "readonly" : ""}>
+    <div class="hint">Open your league on ESPN and copy the address. It contains <b>leagueId=</b>.</div>
+    <label class="f" for="es2">espn_s2 <span class="meta">(private leagues)</span></label><input type="text" id="es2" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <label class="f" for="esw">SWID <span class="meta">(private leagues)</span></label><input type="text" id="esw" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="{XXXXXXXX-XXXX-…}">
+    <details class="howto"><summary>How to find espn_s2 and SWID (2 minutes, on a computer)</summary>
+      <ol><li>On a computer, open <b>fantasy.espn.com</b> in Chrome and sign in.</li>
+      <li>Press <b>F12</b> (or right-click → Inspect), open the <b>Application</b> tab.</li>
+      <li>On the left: <b>Cookies → https://fantasy.espn.com</b>.</li>
+      <li>Find <b>espn_s2</b> and <b>SWID</b>. Double-click each Value, copy it, paste it here.</li></ol>
+      <p class="sub">These work like a login to your ESPN fantasy account. They're stored encrypted and only used to read rosters. Leave both blank for a public league.</p></details>
+    <div class="actions"><button class="btn" data-act="espnGo">${prefill.reconnect ? "Reconnect" : "Link league"}</button></div><div id="dlgErr" class="err"></div>`);
+}
+function sleeperDlg() {
+  openDlg(`<h3>Link a Sleeper league</h3>
+    <label class="f" for="su">Sleeper username</label><input type="text" id="su" autocomplete="off" autocapitalize="off">
+    <div class="actions"><button class="btn" data-act="sleeperFind">Find my leagues</button></div><div id="sleeperOut"></div><div id="dlgErr" class="err"></div>`);
+  setTimeout(() => $("su")?.focus(), 50);
+}
+async function afterLink(r, label) {
+  await refresh(true);
+  if (r.teamId) {
+    S.activeTeam = r.teamId; localStorage.setItem("fit-team", r.teamId);
+    closeDlg(); location.hash = "teams"; render();
+    toast(`${label} linked`, "Your roster is in, with QB and teammate links added. It stays in sync automatically.");
+  } else {
+    S.pendingJoin = r.inviteCode; joinDlg("We couldn't tell which team is yours. Pick it below.");
+  }
+}
+async function joinDlg(msg) {
+  const code = S.pendingJoin;
+  if (!code) return;
+  openDlg(`<h3>Join a league</h3><p class="sub">Loading…</p>`);
+  try {
+    const r = await api("leagueForInvite", { code });
+    openDlg(`<h3>${esc(r.league.name)}</h3><p class="sub">${esc(msg || `Tap your team to add it. It stays in sync with ${PLATFORM[r.league.platform]} automatically.`)}</p>
+      <div class="panel">${r.teams.map((t) => `<div class="row"><span class="who"><span class="name">${esc(t.name)}</span><br><span class="meta">${esc(t.manager || "")}</span></span>
+        ${t.mine ? `<span class="tag">Yours</span>` : t.claimed ? `<span class="tag">Claimed</span>` : `<button class="btn small" data-act="claim" data-lt="${esc(t.id)}">This is me</button>`}</div>`).join("")}</div>
+      <div id="dlgErr" class="err"></div>`);
+  } catch (e) { openDlg(`<h3>Join a league</h3><p class="err">${esc(e.message)}</p>`); S.pendingJoin = null; }
+}
+function joinManualDlg() {
+  openDlg(`<h3>Join with an invite</h3><p class="sub">Paste the invite link someone in your league sent you.</p>
+    <label class="f" for="inv">Invite link or code</label><input type="text" id="inv" autocomplete="off" autocapitalize="off">
+    <div class="actions"><button class="btn" data-act="joinGo">Continue</button></div><div id="dlgErr" class="err"></div>`);
+  setTimeout(() => $("inv")?.focus(), 50);
+}
+function inviteUrl(code) { return `${location.origin}${location.pathname}#join=${code}`; }
 
 /* player search used by add-player and add-link */
 let searchTimer = null, searchPick = null;
@@ -554,6 +664,62 @@ document.addEventListener("click", async (e) => {
       case "applyUpdate": S.waitingSW?.postMessage("skipWaiting"); return;
       case "enablePush": return enablePush();
       case "newTeam": return newTeamDlg();
+      case "manualTeam": return manualTeamDlg();
+      case "linkEspn": return espnDlg();
+      case "linkSleeper": return sleeperDlg();
+      case "joinManual": return joinManualDlg();
+      case "joinGo": {
+        const v = $("inv").value.trim(), code = (v.match(/join=([A-Za-z0-9]+)/) || [])[1] || (/^[A-Za-z0-9]{6,20}$/.test(v) ? v : "");
+        if (!code) return setErr("Paste the full invite link.");
+        S.pendingJoin = code; return joinDlg();
+      }
+      case "espnGo": {
+        a.disabled = true; a.textContent = "Linking…";
+        try {
+          const r = await api("linkLeague", { platform: "espn", league: $("elg").value, espn_s2: $("es2").value, swid: $("esw").value });
+          S.leagueMeta = {}; return afterLink(r, "ESPN league");
+        } finally { if ($("elg")) { a.disabled = false; a.textContent = "Link league"; } }
+      }
+      case "reconnectEspn": return espnDlg({ reconnect: true, league: a.dataset.ext });
+      case "sleeperFind": {
+        a.disabled = true;
+        try {
+          const r = await api("sleeperLeagues", { username: $("su").value.trim() });
+          S.sleeperCtx = r;
+          $("sleeperOut").innerHTML = r.leagues.length ? `<h2>Your ${r.season} leagues</h2><div class="panel">${r.leagues.map((l) => `<div class="row"><span class="who"><span class="name">${esc(l.name)}</span><br><span class="meta">${esc(l.teams)} teams${r.alreadyLinked.includes(l.id) ? " · already linked by someone" : ""}</span></span><button class="btn small" data-act="sleeperLink" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Link</button></div>`).join("")}</div>` : `<p class="sub">No ${r.season} leagues found for that username.</p>`;
+        } finally { a.disabled = false; }
+        return;
+      }
+      case "sleeperLink": {
+        a.disabled = true; a.textContent = "Linking…";
+        const r = await api("linkLeague", { platform: "sleeper", league: a.dataset.id, sleeperUserId: S.sleeperCtx?.sleeperUserId });
+        return afterLink(r, a.dataset.name);
+      }
+      case "claim": {
+        a.disabled = true;
+        const r = await api("claimTeam", { leagueTeamId: a.dataset.lt, code: S.pendingJoin });
+        S.pendingJoin = null; return afterLink({ teamId: r.teamId }, "Team");
+      }
+      case "syncNow": {
+        a.disabled = true;
+        await api("syncLeagueNow", { teamId: t.id });
+        S.leagueMeta[t.id] = null; await refresh(true); closeDlg(); render();
+        return toast("Synced", "Your roster matches the league.");
+      }
+      case "shareInvite": {
+        const url = inviteUrl(a.dataset.code);
+        if (navigator.share) { try { await navigator.share({ title: "Join my league on Fantasy Injury Tracker", text: "Tap to claim your team:", url }); } catch { /* cancelled */ } return; }
+        await navigator.clipboard?.writeText(url); return toast("Invite link copied", url);
+      }
+      case "copyInvite": { const url = inviteUrl(a.dataset.code); await navigator.clipboard?.writeText(url); return toast("Invite link copied", url); }
+      case "release": {
+        if (!confirm("Release this team so someone else can claim it?")) return;
+        await api("releaseClaim", { leagueTeamId: a.dataset.lt }); return syncedSettingsDlg(t);
+      }
+      case "unlinkTeam": {
+        if (!confirm("Stop syncing this team? It stays in the app as a manual team, and someone else can claim it in the league.")) return;
+        await api("unlinkTeam", { teamId: t.id }); t.league_team_id = null; closeDlg(); render(); return;
+      }
       case "upgrade": return upgradeDlg();
       case "saveTeam": {
         const name = $("tn").value.trim(); if (!name) return $("tn").focus();
@@ -646,6 +812,7 @@ document.addEventListener("change", async (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;
   if (e.target.id === "em") sendLink();
+  else if (e.target.id === "su") document.querySelector('[data-act="sleeperFind"]')?.click();
   else if (e.target.id === "tn") document.querySelector('[data-act="saveTeam"],[data-act="saveTeamSettings"]')?.click();
 });
 

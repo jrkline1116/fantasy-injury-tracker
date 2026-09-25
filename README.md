@@ -109,15 +109,30 @@ Every alert uses the same shape: the title is the player whose status changed, a
 
 | Situation | Alert |
 |---|---|
-| Linked QB ruled out | **Burrow OUT** · → Higgins DOWNGRADE · consider benching |
-| RB1 out, handcuff on your bench | **Hubbard OUT** · → Dowdle UPGRADE · start him |
-| RB1 cleared, handcuff in your lineup | **Hubbard ACTIVE** · → Dowdle DOWNGRADE · consider benching |
-| Your if/then rule triggers | **McConkey ACTIVE** · RULE → start McConkey over Evans |
-| Your own starter ruled out | **Evans OUT** · In your lineup · swap him out |
+| Linked QB ruled out | **Smith ACTIVE → OUT** · → Bowers DOWNGRADE · consider benching |
+| Your starter goes Out → Questionable | **Bowers OUT → QUESTIONABLE** · In your lineup · trending up, still questionable |
+| Your starter is cleared | **Bowers QUESTIONABLE → ACTIVE** · In your lineup · cleared to play |
+| RB1 out, handcuff on your bench | **Hubbard ACTIVE → OUT** · → Dowdle UPGRADE · start him |
+| RB1 cleared, handcuff in your lineup | **Hubbard QUESTIONABLE → ACTIVE** · → Dowdle DOWNGRADE · consider benching |
+| Your if/then rule triggers | **McConkey QUESTIONABLE → ACTIVE** · RULE → start McConkey over Evans |
 
-The default alert setting, **Out or cleared**, fires when a player is ruled out (Out, IR, suspended) or cleared to play, and skips new Questionable/Doubtful tags. **Everything** includes those tags too.
+Titles always show the move (from → to). Lines use **UPGRADE** or **DOWNGRADE** when a player crosses in or out of playing, and **WATCH** for a trend that isn't settled yet (Out → Questionable, Active → Questionable).
+
+The default alert setting, **Out or cleared**, fires when a player is ruled out (Out, IR, suspended), comes back off it (including Out → Questionable), or is fully cleared. It skips new Questionable and Doubtful tags on healthy players. **Everything** includes those tags too.
 
 **If/then rules** are set per team (Add rule, or from a player's screen). They fire once, always come through even in quiet hours, and clear themselves on Tuesday. The pre-game check also lists rules still waiting on a Questionable player. The app can't change your ESPN lineup for you; the alert tells you exactly what to swap.
+
+## League sync (ESPN + Sleeper)
+
+Tap **+ Team** to link a league instead of typing a roster. One person links the league; everyone else in it opens that person's **invite link** (Team settings → Share invite link), signs in, and claims their team.
+
+- **Sleeper:** enter a username, pick leagues.
+- **ESPN:** paste the league URL. Private leagues also need the `espn_s2` and `SWID` cookies from a computer (the app shows how). They're encrypted with `LEAGUE_SECRET_KEY` and never readable from the browser.
+- Synced every 3 hours, every 30 minutes around games, plus **Sync now**. Lineup slots, bench, and IR come from the league; links, rules, and alert settings still work.
+- If ESPN cookies expire, the linker gets a "Reconnect" notification and the league pauses until they update them.
+- **Stop syncing** turns a team back into a manual team.
+
+Setup: run `007_league_sync.sql`, add an Edge Function secret named `LEAGUE_SECRET_KEY` (any long random string; never change it later or saved cookies can't be read), and redeploy both functions.
 
 ## Free and Pro
 

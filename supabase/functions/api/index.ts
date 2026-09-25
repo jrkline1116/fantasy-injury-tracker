@@ -3,7 +3,10 @@
 //   simulate    send yourself a test alert for a status change (doesn't change real data)
 //   pregameNow  send yourself a pre-game check right now
 //   testPush    send a plain test notification
+//   sleeperLeagues / linkLeague / leagueForInvite / claimTeam / leagueInfo /
+//   syncLeagueNow / releaseClaim / unlinkTeam   league sync (Sleeper + ESPN)
 import { addPlayersToTeam, adminClient, cors, deliver, json, loadUser, pregameLines, sendPush, statusAlerts, type Admin } from "../_shared/core.ts";
+import { claimTeam, leagueForInvite, leagueInfo, linkLeague, sleeperUserLeagues, syncLeague } from "../_shared/leagues.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -43,6 +46,33 @@ Deno.serve(async (req) => {
       case "testPush": {
         const n = await sendPush(admin, user.id, { title: "Fantasy Injury Tracker", body: "Notifications are working on this device.", tag: "test", url: "./#alerts" });
         return json({ devices: n });
+      }
+      case "sleeperLeagues": {
+        const name = String(body.username ?? "").trim();
+        if (!/^[A-Za-z0-9_]{1,40}$/.test(name)) return json({ error: "Enter your Sleeper username." }, 400);
+        const r = await sleeperUserLeagues(name);
+        const { data: linked } = await admin.from("leagues").select("external_id").eq("platform", "sleeper").eq("season", r.season).in("external_id", r.leagues.map((l: any) => l.id));
+        return json({ ...r, alreadyLinked: (linked ?? []).map((x) => x.external_id) });
+      }
+      case "linkLeague": return json(await linkLeague(admin, user.id, body));
+      case "leagueForInvite": return json(await leagueForInvite(admin, user.id, String(body.code ?? "")));
+      case "claimTeam": return json({ teamId: await claimTeam(admin, user.id, String(body.leagueTeamId), { code: String(body.code ?? "") }) });
+      case "leagueInfo": return json(await leagueInfo(admin, user.id, String(body.teamId)));
+      case "syncLeagueNow": {
+        const info = await leagueInfo(admin, user.id, String(body.teamId));
+        if (!info) return json({ error: "That team isn't linked to a league." }, 400);
+        const { data: league } = await admin.from("leagues").select("*").eq("id", info.leagueId).single();
+        return json(await syncLeague(admin, league, { quiet: true }));
+      }
+      case "releaseClaim": {
+        const { data: lt } = await admin.from("league_teams").select("id, leagues(linked_by)").eq("id", String(body.leagueTeamId)).maybeSingle();
+        if (!lt || (lt as any).leagues?.linked_by !== user.id) return json({ error: "Only the person who linked the league can release teams." }, 403);
+        await admin.from("user_teams").update({ league_team_id: null }).eq("league_team_id", lt.id);
+        return json({ ok: true });
+      }
+      case "unlinkTeam": {
+        await admin.from("user_teams").update({ league_team_id: null }).eq("id", String(body.teamId)).eq("user_id", user.id);
+        return json({ ok: true });
       }
       default: return json({ error: "Unknown action." }, 400);
     }

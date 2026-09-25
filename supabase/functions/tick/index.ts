@@ -6,6 +6,7 @@
 //   Pre-game check                     every run when games are close
 //   Bye-week warning                   every 30 min (sends Thursday 9am local)
 //   Expired if/then rules cleanup      every hour
+import { syncLeague } from "../_shared/leagues.ts";
 import {
   adminClient, byeLines, deliver, fetchAll, inChunks, json, loadUser, loadWatchers,
   localClock, mapStatus, normName, normTeam, pregameLines, pushAlert, statusAlerts,
@@ -73,6 +74,14 @@ Deno.serve(async (req) => {
     await run("pregame", () => pregame(admin, now, games));
   }
   if (due("bye", 30)) await run("bye", () => byeWeek(admin, now, games));
+  if (due("leagues", hot ? 30 : 180)) await run("leagues", async () => {
+    const { data: leagues } = await admin.from("leagues").select("*").neq("status", "reconnect");
+    const out: Record<string, unknown> = {};
+    for (const l of leagues ?? []) {
+      try { out[l.name] = await syncLeague(admin, l); } catch (e) { out[l.name] = `error: ${(e as Error).message}`; }
+    }
+    return out;
+  });
   if (due("cleanup", 60)) await run("cleanup", async () => {
     const { count } = await admin.from("rules").delete({ count: "exact" }).lt("expires_at", new Date(now.getTime() - 86400e3).toISOString());
     return { rulesRemoved: count ?? 0 };
@@ -139,6 +148,14 @@ async function syncSchedule(admin: Admin) {
 
 /* ---------- injury statuses from ESPN ---------- */
 type Inj = { espnId: string | null; name: string; team: string | null; status: string; detail: string | null };
+/** ESPN notes sometimes arrive truncated ("... limited in practice .."). Tidy the ends. */
+function cleanNote(raw?: string | null): string | null {
+  if (!raw) return null;
+  let t = String(raw).replace(/\s+/g, " ").trim().replace(/[.\u2026]{2,}$/, "").trim();
+  if (!t) return null;
+  if (!/[.!?]$/.test(t)) t += ".";
+  return t.slice(0, 300);
+}
 function extractInjuries(data: unknown): Inj[] {
   const out: Inj[] = [];
   const walk = (o: any, team?: string | null) => {
@@ -148,7 +165,7 @@ function extractInjuries(data: unknown): Inj[] {
     if (o.athlete && typeof o.athlete === "object" && typeof o.status === "string") {
       const a = o.athlete;
       const id = a.id ? String(a.id) : (JSON.stringify(a.links ?? "").match(/\/id\/(\d+)/)?.[1] ?? null);
-      out.push({ espnId: id, name: a.displayName ?? a.fullName ?? "", team: normTeam(a.team?.abbreviation ?? here ?? null), status: o.status, detail: o.shortComment ?? o.type?.description ?? null });
+      out.push({ espnId: id, name: a.displayName ?? a.fullName ?? "", team: normTeam(a.team?.abbreviation ?? here ?? null), status: o.status, detail: cleanNote(o.shortComment ?? o.longComment ?? o.type?.description ?? null) });
       return;
     }
     for (const k of Object.keys(o)) walk(o[k], here);
@@ -180,7 +197,6 @@ async function pollInjuries(admin: Admin, now: Date, firstRun: boolean) {
     }
     if (!pid) continue;
     const code = mapStatus(e.status);
-    if (code === "ACT") continue;
     const prev = next.get(pid);
     if (!prev || rank[code] > rank[prev.status]) next.set(pid, { status: code, detail: e.detail });
   }
@@ -191,23 +207,28 @@ async function pollInjuries(admin: Admin, now: Date, firstRun: boolean) {
     if (!next.has(p.id)) next.set(p.id, { status: p.sleeper_status, detail: null });
   }
 
-  const current = await fetchAll<{ player_id: string; status: string }>(
-    (a, b) => admin.from("player_status").select("player_id,status").neq("status", "ACT").order("player_id").range(a, b));
-  const cur = new Map(current.map((c) => [c.player_id, c.status]));
+  const current = await fetchAll<{ player_id: string; status: string; detail: string | null }>(
+    (a, b) => admin.from("player_status").select("player_id,status,detail").order("player_id").range(a, b));
+  const cur = new Map(current.map((c) => [c.player_id, c]));
   const changes: { playerId: string; from: string; to: string; eventId?: string | number }[] = [];
-  for (const [pid, v] of next) if ((cur.get(pid) ?? "ACT") !== v.status) changes.push({ playerId: pid, from: cur.get(pid) ?? "ACT", to: v.status });
-  for (const [pid, s] of cur) if (!next.has(pid)) changes.push({ playerId: pid, from: s, to: "ACT" });
+  for (const [pid, v] of next) if ((cur.get(pid)?.status ?? "ACT") !== v.status) changes.push({ playerId: pid, from: cur.get(pid)?.status ?? "ACT", to: v.status });
+  for (const [pid, c] of cur) if (!next.has(pid) && c.status !== "ACT") changes.push({ playerId: pid, from: c.status, to: "ACT" });
+  // notes that changed without a status change: saved quietly, no alert
+  const noteOnly = [...next].filter(([pid, v]) => {
+    const c = cur.get(pid);
+    return c && c.status === v.status && (c.detail ?? null) !== (v.detail ?? null);
+  }).map(([pid, v]) => ({ player_id: pid, status: v.status, detail: v.detail, updated_at: new Date().toISOString() }));
 
   const clears = changes.filter((c) => c.to === "ACT").length;
   if (!firstRun && clears > 150) throw new Error(`${clears} players cleared at once; feed probably partial, skipped`);
 
   const stamp = now.toISOString();
-  const upserts = changes.map((c) => ({ player_id: c.playerId, status: c.to, detail: next.get(c.playerId)?.detail ?? null, updated_at: stamp }));
+  const upserts = [...changes.map((c) => ({ player_id: c.playerId, status: c.to, detail: next.get(c.playerId)?.detail ?? null, updated_at: stamp })), ...noteOnly];
   for (let i = 0; i < upserts.length; i += 500) {
     const { error } = await admin.from("player_status").upsert(upserts.slice(i, i + 500), { onConflict: "player_id" });
     if (error) throw error;
   }
-  if (!changes.length) return { entries: entries.length, changes: 0 };
+  if (!changes.length) return { entries: entries.length, changes: 0, notes: noteOnly.length };
   const { data: ev } = await admin.from("status_events")
     .insert(changes.map((c) => ({ player_id: c.playerId, from_status: c.from, to_status: c.to }))).select("id,player_id");
   for (const c of changes) c.eventId = ev?.find((x) => x.player_id === c.playerId)?.id;
