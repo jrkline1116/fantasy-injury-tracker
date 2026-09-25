@@ -338,8 +338,8 @@ export async function claimTeam(admin: Admin, userId: string, leagueTeamId: stri
     throw new Error("Someone already claimed that team. Ask the person who linked the league to release it.");
   }
   const { data: mine } = await admin.from("user_teams").select("name").eq("user_id", userId);
-  let name = league.name.slice(0, 40);
-  if ((mine ?? []).some((t) => t.name === name)) name = `${league.name} · ${lt.name}`.slice(0, 40);
+  let name = String(lt.name || league.name).slice(0, 40);
+  if ((mine ?? []).some((t) => t.name === name)) name = `${lt.name} · ${league.name}`.slice(0, 40);
   const { data: ut, error } = await admin.from("user_teams").insert({ user_id: userId, name, league_team_id: lt.id, sort: (mine ?? []).length }).select().single();
   if (error) throw error;
   await applyRoster(admin, ut, lt.roster ?? []);

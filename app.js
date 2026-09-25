@@ -1,6 +1,6 @@
 /* Fantasy Injury Tracker — app */
 "use strict";
-const APP_VERSION = "2.0.0"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.0.1"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -213,7 +213,7 @@ function syncBar(t) {
   if (!m || m.loading) { loadLeagueMeta(t); return `<div class="syncbar">Synced from your league…</div>`; }
   if (m.error || m.missing) return `<div class="syncbar warn">Couldn't load league info. <button class="linkbtn" data-act="syncNow">Try again</button></div>`;
   if (m.status === "reconnect") return `<div class="syncbar warn">${m.isLinker ? `${esc(PLATFORM[m.platform])} needs you to reconnect.` : "Sync paused: the league's ESPN login expired."} <button class="linkbtn" data-act="teamSettings">${m.isLinker ? "Reconnect" : "Details"}</button></div>`;
-  return `<div class="syncbar">Synced from ${esc(PLATFORM[m.platform])} · ${esc(m.leagueName)} · ${m.syncedAt ? esc(ago(m.syncedAt)) : "just now"} <button class="linkbtn" data-act="syncNow">Sync now</button>${m.unmatched?.length ? `<br><span class="warn">${m.unmatched.length} player${m.unmatched.length === 1 ? "" : "s"} couldn't be matched: ${esc(m.unmatched.join(", "))}</span>` : ""}</div>`;
+  return `<div class="syncbar">Synced from ${esc(PLATFORM[m.platform])} · ${esc(m.leagueName)} · ${m.syncedAt ? esc(ago(m.syncedAt)) : "just now"} <button class="linkbtn" data-act="syncNow">Sync now</button>${m.isLinker ? ` <button class="linkbtn" data-act="shareInvite" data-code="${esc(m.inviteCode)}">Invite league</button>` : ""}${m.unmatched?.length ? `<br><span class="warn">${m.unmatched.length} player${m.unmatched.length === 1 ? "" : "s"} couldn't be matched: ${esc(m.unmatched.join(", "))}</span>` : ""}</div>`;
 }
 function ago(ts) {
   const m = Math.round((Date.now() - new Date(ts).getTime()) / 60000);
@@ -412,18 +412,40 @@ async function syncedSettingsDlg(t) {
 
 /* ---------- league linking ---------- */
 function espnDlg(prefill = {}) {
+  const priv = !!prefill.reconnect || !!prefill.private;
   openDlg(`<h3>${prefill.reconnect ? "Reconnect ESPN" : "Link an ESPN league"}</h3>
-    <label class="f" for="elg">League URL</label><input type="text" id="elg" placeholder="https://fantasy.espn.com/football/league?leagueId=…" value="${esc(prefill.league || "")}" ${prefill.reconnect ? "readonly" : ""}>
-    <div class="hint">Open your league on ESPN and copy the address. It contains <b>leagueId=</b>.</div>
-    <label class="f" for="es2">espn_s2 <span class="meta">(private leagues)</span></label><input type="text" id="es2" autocomplete="off" autocapitalize="off" spellcheck="false">
-    <label class="f" for="esw">SWID <span class="meta">(private leagues)</span></label><input type="text" id="esw" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="{XXXXXXXX-XXXX-…}">
-    <details class="howto"><summary>How to find espn_s2 and SWID (2 minutes, on a computer)</summary>
-      <ol><li>On a computer, open <b>fantasy.espn.com</b> in Chrome and sign in.</li>
-      <li>Press <b>F12</b> (or right-click → Inspect), open the <b>Application</b> tab.</li>
-      <li>On the left: <b>Cookies → https://fantasy.espn.com</b>.</li>
-      <li>Find <b>espn_s2</b> and <b>SWID</b>. Double-click each Value, copy it, paste it here.</li></ol>
-      <p class="sub">These work like a login to your ESPN fantasy account. They're stored encrypted and only used to read rosters. Leave both blank for a public league.</p></details>
-    <div class="actions"><button class="btn" data-act="espnGo">${prefill.reconnect ? "Reconnect" : "Link league"}</button></div><div id="dlgErr" class="err"></div>`);
+    ${prefill.reconnect ? `<p class="sub">ESPN stopped accepting the saved login. Paste fresh cookies below (steps included).</p>` :
+    `<div class="tipbox">Someone in your league already linked it? Ask them for the <b>invite link</b> instead. You won't need any of this.</div>`}
+
+    <div class="stepnum">Step 1 · Your league's web address</div>
+    <label class="f" for="elg">League URL</label>
+    <input type="text" id="elg" placeholder="https://fantasy.espn.com/football/league?leagueId=…" value="${esc(prefill.league || "")}" ${prefill.reconnect ? "readonly" : ""} autocomplete="off" autocapitalize="off" spellcheck="false">
+    ${prefill.reconnect ? "" : `<details class="howto"><summary>Where do I find it?</summary><ol>
+      <li>In a web browser (not the ESPN app), go to <b>fantasy.espn.com</b> and sign in.</li>
+      <li>Open your league so you see your team or the standings.</li>
+      <li>Copy the whole address from the address bar. It contains <b>leagueId=</b> followed by numbers.</li>
+      <li>Paste it above. Just the number works too.</li></ol></details>`}
+
+    <div id="privBox" ${priv ? "" : "hidden"}>
+      <div class="stepnum">Step 2 · Private league access</div>
+      ${prefill.private ? `<p class="warnbox">This league is private, so ESPN needs proof you're in it. Pick one option.</p>` : ""}
+      ${prefill.reconnect ? "" : `<details class="howto"><summary><b>Easiest:</b> have your commissioner make the league public</summary>
+        <p>The commissioner opens the league on ESPN's website, goes to <b>League → Settings → Basic Settings</b>, and turns on <b>Make League Viewable to Public</b>. Rosters become viewable by link (nothing else changes). Then tap <b>Link league</b> again with just the URL.</p></details>`}
+      <details class="howto" ${prefill.reconnect ? "open" : ""}><summary><b>Or:</b> copy two ESPN cookies (about 2 minutes, needs a computer)</summary><ol>
+        <li>On a computer, open <b>Chrome</b>, go to <b>fantasy.espn.com</b>, and make sure you're signed in.</li>
+        <li>Press <b>F12</b>. A developer panel opens on the side.</li>
+        <li>At the top of that panel, click the <b>»</b> arrows next to <b>Console</b> and choose <b>Application</b>.</li>
+        <li>In its left sidebar under <b>Storage</b>, expand <b>Cookies</b> and click <b>https://fantasy.espn.com</b>.</li>
+        <li>In the <b>Filter</b> box type <b>espn_s2</b>. Click the row; the full value appears below. Copy all of it into <b>espn_s2</b> here.</li>
+        <li>Change the filter to <b>SWID</b> and copy that value, curly braces included, into <b>SWID</b> here.</li></ol>
+        <p class="sub">These act like a login to your ESPN fantasy account, so don't share them in screenshots. The app stores them encrypted and only uses them to read rosters. Easier: paste them into a text or email to yourself, then copy them on your phone.</p></details>
+      <label class="f" for="es2">espn_s2</label><input type="text" id="es2" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="AEB…  (long)">
+      <label class="f" for="esw">SWID</label><input type="text" id="esw" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}">
+    </div>
+
+    <div class="actions"><button class="btn" data-act="espnGo">${prefill.reconnect ? "Reconnect" : "Link league"}</button>
+      ${priv ? "" : `<button class="btn ghost small" data-act="espnPrivate">My league is private</button>`}</div>
+    <div id="dlgErr" class="err"></div>`);
 }
 function sleeperDlg() {
   openDlg(`<h3>Link a Sleeper league</h3>
@@ -674,12 +696,19 @@ document.addEventListener("click", async (e) => {
         S.pendingJoin = code; return joinDlg();
       }
       case "espnGo": {
+        const league = $("elg").value.trim(), s2 = $("es2")?.value.trim() || "", sw = $("esw")?.value.trim() || "";
+        if (!/leagueId=\d+|^\d{3,12}$/i.test(league)) return setErr("Paste your league's web address. It should contain leagueId= and a number.");
+        if (!!s2 !== !!sw) return setErr("Add both cookies (espn_s2 and SWID), or leave both blank.");
         a.disabled = true; a.textContent = "Linking…";
         try {
-          const r = await api("linkLeague", { platform: "espn", league: $("elg").value, espn_s2: $("es2").value, swid: $("esw").value });
+          const r = await api("linkLeague", { platform: "espn", league, espn_s2: s2, swid: sw });
           S.leagueMeta = {}; return afterLink(r, "ESPN league");
+        } catch (err) {
+          if (/private/i.test(err.message) && !s2) { espnDlg({ league, private: true }); return; }
+          throw err;
         } finally { if ($("elg")) { a.disabled = false; a.textContent = "Link league"; } }
       }
+      case "espnPrivate": { $("privBox").hidden = false; a.remove(); return; }
       case "reconnectEspn": return espnDlg({ reconnect: true, league: a.dataset.ext });
       case "sleeperFind": {
         a.disabled = true;

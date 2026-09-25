@@ -153,3 +153,7 @@ button,select,input,a{touch-action:manipulation;-webkit-tap-highlight-color:tran
 .howto summary{cursor:pointer;color:var(--brand);font-weight:600}
 .howto ol{padding-left:20px;margin:8px 0}
 .howto li{margin:4px 0}
+.stepnum{margin:16px 0 2px;font:700 .8rem/1 var(--body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.tipbox{margin:6px 0 4px;padding:10px 12px;border-radius:8px;background:var(--surface2);font-size:.88rem}
+.warnbox{margin:6px 0 4px;padding:10px 12px;border-radius:8px;border:1.5px solid var(--out);font-size:.88rem}
+.howto p{margin:6px 0;font-size:.88rem}
