@@ -3,3 +3,10 @@ node_modules/
 supabase/.temp/
 supabase/.branches/
 .env
+.env.*
+
+# Never commit credentials (this repo is public)
+*.txt
+*secret*
+*password*
+*PASSWORD*
