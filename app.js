@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.5.4"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.5.5"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -46,12 +46,21 @@ function readHash() {
   const h = (location.hash || "#teams").slice(1);
   const m = h.match(/^join=([A-Za-z0-9]+)/);
   const y = h.match(/^yahoo=(ok|err:(.*))$/);
+  const e = h.match(/^espn=([A-Za-z0-9_-]+)$/);
+  if (e) {
+    // sent by the ESPN bookmark: league id + login cookies. Kept in memory only, and wiped from the address bar right away.
+    try {
+      const d = JSON.parse(atob(e[1].replace(/-/g, "+").replace(/_/g, "/")));
+      S.pendingEspn = { league: `https://fantasy.espn.com/football/league?leagueId=${String(d.l).replace(/\D/g, "")}`, s2: String(d.s || ""), sw: String(d.w || "") };
+    } catch { S.pendingEspn = { bad: true }; }
+    history.replaceState(null, "", location.pathname + "#teams"); S.view = "teams"; return;
+  }
   if (m) { S.pendingJoin = m[1]; history.replaceState(null, "", location.pathname + "#teams"); S.view = "teams"; }
   else if (y) { S.pendingYahoo = { err: y[2] ? decodeURIComponent(y[2]) : "" }; history.replaceState(null, "", location.pathname + "#teams"); S.view = "teams"; }
   else S.view = h;
 }
 readHash();
-window.addEventListener("hashchange", () => { readHash(); if (S.loaded) { render(); if (S.pendingJoin) joinDlg(); else if (S.pendingYahoo) yahooReturn(); } });
+window.addEventListener("hashchange", () => { readHash(); if (S.loaded) { render(); if (S.pendingJoin) joinDlg(); else if (S.pendingYahoo) yahooReturn(); else if (S.pendingEspn) espnFromBookmark(); } });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible" || !S.loaded) return;
   if (S.yahooWaiting && dlg.open) return yahooDlg(); // back from Yahoo's sign-in page
@@ -149,6 +158,7 @@ async function loadAll() {
     render();
     if (S.pendingJoin) joinDlg();
     else if (S.pendingYahoo) yahooReturn();
+    else if (S.pendingEspn) espnFromBookmark();
   } catch (e) { showError(e); }
 }
 async function ensureSettings() {
@@ -501,6 +511,24 @@ async function syncedSettingsDlg(t) {
 
 /* ---------- league linking ---------- */
 const COMMISH_MSG = "Can you make our ESPN fantasy league viewable to the public? I want to link it to an injury-alert app. On ESPN's website (not the app): open our league, click LM Tools, then Basic Settings, then Edit. Set \"Make League Viewable to Public\" to Yes and click Save. It only lets people with the league link see rosters. Nothing else changes.";
+// The ESPN bookmark: runs on fantasy.espn.com, reads the league id + login cookies, and opens this app
+// with them in the #fragment (never sent to any server; the app wipes it from the address bar on arrival).
+function espnBookmarklet() {
+  const app = location.origin + location.pathname;
+  return "javascript:(()=>{if(!/(^|\\.)espn\\.com$/.test(location.hostname)){alert('Open your ESPN fantasy league at fantasy.espn.com first, then click this bookmark.');return}"
+    + "const g=n=>(document.cookie.match('(?:^|; )'+n+'=([^;]*)')||[])[1];const l=new URLSearchParams(location.search).get('leagueId');const s=g('espn_s2'),w=g('SWID');"
+    + "if(!l){alert('Open your league first (the address should contain leagueId=), then click again.');return}"
+    + "if(!s||!w){alert('Sign in to ESPN first, then click again.');return}"
+    + "const d=btoa(JSON.stringify({l:l,s:s,w:w})).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');"
+    + `window.open('${app}#espn='+d,'_blank')})()`;
+}
+function espnFromBookmark() {
+  const p = S.pendingEspn; S.pendingEspn = null;
+  if (!p) return;
+  if (p.bad || !p.s2 || !p.sw) return openDlg(`<h3>Link an ESPN league</h3><p class="err">The bookmark didn't send a complete ESPN login. Open your league on fantasy.espn.com while signed in, then click the bookmark again.</p>`);
+  // linking again also refreshes the saved login for a league that's already linked
+  espnDlg({ league: p.league, s2: p.s2, sw: p.sw, private: true, fromBookmark: true });
+}
 function espnDlg(prefill = {}) {
   const priv = !!prefill.reconnect || !!prefill.private;
   openDlg(`<h3>${prefill.reconnect ? "Reconnect ESPN" : "Link an ESPN league"}</h3>
@@ -508,6 +536,7 @@ function espnDlg(prefill = {}) {
     `<div class="tipbox">Someone in your league already linked it? Ask them for the <b>invite link</b> instead. You won't need any of this.</div>
     <p class="sub">Most leagues take one step: paste the league's address and tap <b>Link league</b>. If your league is private, the app will say so and show two ways to finish.</p>`}
 
+    ${prefill.fromBookmark ? `<p class="tipbox"><b>Filled in from ESPN.</b> Your league and ESPN login came from the bookmark. Tap <b>${prefill.reconnect ? "Reconnect" : "Link league"}</b> to finish.</p>` : ""}
     <div class="stepnum">Step 1 · Your league's address</div>
     <label class="f" for="elg">League URL</label>
     <input type="text" id="elg" placeholder="https://fantasy.espn.com/football/league?leagueId=…" value="${esc(prefill.league || "")}" ${prefill.reconnect ? "readonly" : ""} autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -527,7 +556,15 @@ function espnDlg(prefill = {}) {
         <p>It takes them about 30 seconds on ESPN's website: <b>LM Tools → Basic Settings → Edit → Make League Viewable to Public → Yes → Save</b>. Rosters become viewable to anyone with the league link. Nothing else about the league changes.</p>
         <div class="actions"><button class="btn small" data-act="askCommish">Send your commissioner the steps</button></div>
         <p class="sub">Once they've done it, come back and tap <b>Link league</b> with just the address. No cookies needed.</p></details>`}
-      <details class="howto" ${prefill.reconnect ? "open" : ""}><summary><b>${prefill.reconnect ? "How to copy them" : "Option B:"}</b>${prefill.reconnect ? "" : " copy two ESPN cookies yourself (about 2 minutes, needs a computer)"}</summary><ol>
+      ${prefill.fromBookmark ? "" : `<details class="howto" open><summary><b>${prefill.reconnect ? "Easiest:" : "Option B (easiest on a computer):"}</b> the one-click ESPN bookmark</summary>
+        <ol>
+          <li>On a computer, in Chrome or Edge, press <b>Ctrl + Shift + B</b> (Mac: <b>Cmd + Shift + B</b>) to show the bookmarks bar.</li>
+          <li>Drag this button onto the bookmarks bar: <a class="btn small" style="text-decoration:none;display:inline-block;cursor:grab" href="${esc(espnBookmarklet())}" data-act="bmHelp">Link to Injury Assist</a></li>
+          <li>Go to <b>fantasy.espn.com</b>, sign in, and open your league.</li>
+          <li>Click <b>Link to Injury Assist</b> on the bookmarks bar. This app opens with everything filled in. Tap <b>${prefill.reconnect ? "Reconnect" : "Link league"}</b>.</li>
+        </ol>
+        <p class="sub">Can't drag it? Right-click the bookmarks bar, choose <b>Add page</b>, name it <b>Link to Injury Assist</b>, and paste this as the URL: <button class="linkbtn" data-act="bmCopy">copy bookmark code</button></p></details>`}
+      <details class="howto" ${prefill.reconnect && prefill.fromBookmark ? "open" : ""}><summary><b>${prefill.reconnect ? "Or copy them by hand" : "Option C:"}</b>${prefill.reconnect ? "" : " copy two ESPN cookies yourself (about 2 minutes, needs a computer)"}</summary><ol>
         <li>On a computer, open <b>Chrome</b>, go to <b>fantasy.espn.com</b>, and make sure you're signed in.</li>
         <li>Press <b>F12</b> (Mac: <b>Cmd + Option + I</b>). A developer panel opens.</li>
         <li>At the top of that panel, click <b>Application</b>. If you don't see it, click the <b>»</b> arrows first.</li>
@@ -535,8 +572,8 @@ function espnDlg(prefill = {}) {
         <li>In the <b>Filter</b> box type <b>espn_s2</b>. Click that row; its full value appears at the bottom. Copy all of it into <b>espn_s2</b> below.</li>
         <li>Change the filter to <b>SWID</b> and copy that value, curly braces included, into <b>SWID</b> below.</li></ol>
         <p class="sub">To get them onto your phone, email or text them to yourself. They work like a login to your ESPN fantasy account, so don't post them in screenshots. The app stores them encrypted and only uses them to read rosters.</p></details>
-      <label class="f" for="es2">espn_s2</label><input type="text" id="es2" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="AEB…  (long)">
-      <label class="f" for="esw">SWID</label><input type="text" id="esw" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}">
+      <label class="f" for="es2">espn_s2</label><input type="text" id="es2" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="AEB…  (long)" value="${esc(prefill.s2 || "")}">
+      <label class="f" for="esw">SWID</label><input type="text" id="esw" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}" value="${esc(prefill.sw || "")}">
     </div>
 
     <div class="actions"><button class="btn" data-act="espnGo">${prefill.reconnect ? "Reconnect" : "Link league"}</button>
@@ -894,6 +931,11 @@ document.addEventListener("click", async (e) => {
           if (/private/i.test(err.message) && !s2) { espnDlg({ league, private: true }); return; }
           throw err;
         } finally { if ($("elg")) { a.disabled = false; a.textContent = "Link league"; } }
+      }
+      case "bmHelp": { e.preventDefault(); return toast("Drag it, don't click it", "Drag the button onto your bookmarks bar, then click it while your ESPN league is open."); }
+      case "bmCopy": {
+        await navigator.clipboard?.writeText(espnBookmarklet());
+        return toast("Bookmark code copied", "Paste it as the URL of a new bookmark.");
       }
       case "askCommish": {
         if (navigator.share) { try { await navigator.share({ text: COMMISH_MSG }); } catch { /* cancelled */ } return; }
