@@ -1,4 +1,4 @@
-# Fantasy Injury Tracker
+# Fantasy Injury Assist
 
 Push alerts when your fantasy players, or the players they depend on, are ruled out or cleared to play.
 

@@ -45,7 +45,7 @@ Deno.serve(async (req) => {
         return json({ pushed: await deliver(admin, [{ user_id: user.id, kind: "test", title: "Test: pre-game check", lines, dedupe_key: `test:${crypto.randomUUID()}`, held_until: null, push: true }]) });
       }
       case "testPush": {
-        const n = await sendPush(admin, user.id, { title: "Fantasy Injury Tracker", body: "Notifications are working on this device.", tag: "test", url: "./#alerts" });
+        const n = await sendPush(admin, user.id, { title: "Fantasy Injury Assist", body: "Notifications are working on this device.", tag: "test", url: "./#alerts" });
         return json({ devices: n });
       }
       case "sleeperLeagues": {

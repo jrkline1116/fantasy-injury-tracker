@@ -1,6 +1,6 @@
-/* Fantasy Injury Tracker — app */
+/* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.3.1"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.4.0"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -860,7 +860,7 @@ document.addEventListener("click", async (e) => {
       }
       case "shareInvite": {
         const url = inviteUrl(a.dataset.code);
-        if (navigator.share) { try { await navigator.share({ title: "Join my league on Fantasy Injury Tracker", text: "Tap to claim your team:", url }); } catch { /* cancelled */ } return; }
+        if (navigator.share) { try { await navigator.share({ title: "Join my league on Fantasy Injury Assist", text: "Tap to claim your team:", url }); } catch { /* cancelled */ } return; }
         await navigator.clipboard?.writeText(url); return toast("Invite link copied", url);
       }
       case "copyInvite": { const url = inviteUrl(a.dataset.code); await navigator.clipboard?.writeText(url); return toast("Invite link copied", url); }

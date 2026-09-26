@@ -1,5 +1,5 @@
 // Bump VERSION on every release so phones pick up the new files.
-const VERSION = "2.3.1";
+const VERSION = "2.4.0";
 const CACHE = "fit-" + VERSION;
 const SHELL = ["./", "./index.html", "./app.css", "./app.js", "./config.js", "./manifest.json",
   "./icons/icon-96.png", "./icons/badge-96.png", "./icons/icon-192.png", "./icons/icon-512.png"];
@@ -38,8 +38,8 @@ self.addEventListener("fetch", (e) => {
 
 self.addEventListener("push", (e) => {
   let d = {};
-  try { d = e.data ? e.data.json() : {}; } catch { d = { title: "Fantasy Injury Tracker", body: e.data?.text() }; }
-  e.waitUntil(self.registration.showNotification(d.title || "Fantasy Injury Tracker", {
+  try { d = e.data ? e.data.json() : {}; } catch { d = { title: "Fantasy Injury Assist", body: e.data?.text() }; }
+  e.waitUntil(self.registration.showNotification(d.title || "Fantasy Injury Assist", {
     body: d.body || "",
     tag: d.tag,
     renotify: !!d.tag,
