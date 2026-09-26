@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.5.8"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.5.10"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -257,6 +257,15 @@ function renderBanner() {
   const b = $("banner");
   if (S.waitingSW) { b.innerHTML = `<div class="bannerbox"><span>A new version is ready.</span><button class="btn small" data-act="applyUpdate">Update now</button></div>`; return; }
   if (S.pushState === "off" && S.view !== "settings") { b.innerHTML = `<div class="bannerbox"><span>Turn on notifications to get alerts on this device.</span><button class="btn small" data-act="enablePush">Turn on</button></div>`; return; }
+  // Android in Chrome (not the Play app): invite them into the Play closed test.
+  // ✕ hides it only until the next visit (session), so it comes back every time they open the site.
+  let androidOff = false;
+  try { androidOff = sessionStorage.getItem("fit-android-banner") === "off"; } catch { /* ignore */ }
+  if (S.view === "teams" && !androidOff && androidBrowser()) {
+    b.innerHTML = `<div class="bannerbox"><span><b>On Android?</b> Get the app from Google Play. It's in testing, and joining helps get it into the store.</span>
+      <span style="display:flex;gap:6px;flex-shrink:0"><a class="btn small" style="text-decoration:none;display:inline-block" href="${ANDROID_GROUP_URL}" target="_blank" rel="noopener">Get the app</a><button class="btn ghost small" data-act="androidDismiss" aria-label="Hide this">✕</button></span></div>`;
+    return;
+  }
   b.innerHTML = "";
 }
 
@@ -906,6 +915,7 @@ document.addEventListener("click", async (e) => {
       case "linkSleeper": return sleeperDlg();
       case "linkYahoo": return yahooDlg();
       // Yahoo now requires approval for its Fantasy API; switch the button back to linkYahoo once approved
+      case "androidDismiss": try { sessionStorage.setItem("fit-android-banner", "off"); } catch { /* ignore */ } return renderBanner();
       case "yahooSoon": return toast("Yahoo is coming soon", "Yahoo is reviewing our access request. Until then, add your Yahoo team by hand with Enter a team by hand.");
       case "yahooSignIn": return yahooSignIn(a);
       case "yahooLink": {
