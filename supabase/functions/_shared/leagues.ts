@@ -128,7 +128,8 @@ async function espnGet(leagueId: string, season: number, creds: EspnCreds) {
     if (res.status === 404) throw new Error(`ESPN couldn't find league ${leagueId} for ${season}. Check the league URL.`);
     tried.push(`${new URL(host).hostname}:${res.status}`);
   }
-  if (tried.every((t) => /40[13]/.test(t))) {
+  // Private leagues: the API host says 401/403, and the backup host answers with an HTML login page instead
+  if (tried.some((t) => /40[13]/.test(t)) && tried.every((t) => /40[13]|not JSON/.test(t))) {
     throw new ReconnectError(creds.espn_s2 ? "ESPN rejected the saved cookies. Reconnect ESPN with fresh espn_s2 and SWID." : "This is a private ESPN league. Add your espn_s2 and SWID cookies.");
   }
   throw new Error(`ESPN request failed (${tried.join(", ")})`);
