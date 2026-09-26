@@ -157,3 +157,10 @@ button,select,input,a{touch-action:manipulation;-webkit-tap-highlight-color:tran
 .tipbox{margin:6px 0 4px;padding:10px 12px;border-radius:8px;background:var(--surface2);font-size:.88rem}
 .warnbox{margin:6px 0 4px;padding:10px 12px;border-radius:8px;border:1.5px solid var(--out);font-size:.88rem}
 .howto p{margin:6px 0;font-size:.88rem}
+.otp{font:600 1.4rem/1 var(--body);letter-spacing:.3em;text-align:center}
+/* practice participation */
+.prac{display:block;margin-top:5px;font-size:.82rem;color:var(--muted)}
+.prac b{font-weight:700;color:var(--ink)}
+.prac .p-DNP{color:var(--out)}
+.prac .p-LP{color:var(--d)}
+.prac .p-FP{color:var(--act)}

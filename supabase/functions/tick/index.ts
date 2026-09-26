@@ -7,8 +7,9 @@
 //   Bye-week warning                   every 30 min (sends Thursday 9am local)
 //   Expired if/then rules cleanup      every hour
 import { syncLeague } from "../_shared/leagues.ts";
+import { parsePractice, practiceDigest, savePractice } from "../_shared/practice.ts";
 import {
-  adminClient, byeLines, deliver, fetchAll, inChunks, json, loadUser, loadWatchers,
+  adminClient, newsAlerts, byeLines, deliver, fetchAll, inChunks, json, loadUser, loadWatchers,
   localClock, mapStatus, normName, normTeam, pregameLines, pushAlert, statusAlerts,
   type Admin, type AlertRow,
 } from "../_shared/core.ts";
@@ -82,6 +83,7 @@ Deno.serve(async (req) => {
     }
     return out;
   });
+  if (due("practice", 20)) await run("practice", () => practiceDigest(admin, now));
   if (due("cleanup", 60)) await run("cleanup", async () => {
     const { count } = await admin.from("rules").delete({ count: "exact" }).lt("expires_at", new Date(now.getTime() - 86400e3).toISOString());
     return { rulesRemoved: count ?? 0 };
@@ -222,13 +224,24 @@ async function pollInjuries(admin: Admin, now: Date, firstRun: boolean) {
   const clears = changes.filter((c) => c.to === "ACT").length;
   if (!firstRun && clears > 150) throw new Error(`${clears} players cleared at once; feed probably partial, skipped`);
 
+  const fresh = [...next].filter(([pid, v]) => (cur.get(pid)?.detail ?? null) !== (v.detail ?? null)).map(([pid, v]) => ({ playerId: pid, note: v.detail }));
+  const practiceSaved = await savePractice(admin, fresh, now).catch((e) => { console.error("practice", e); return 0; });
   const stamp = now.toISOString();
   const upserts = [...changes.map((c) => ({ player_id: c.playerId, status: c.to, detail: next.get(c.playerId)?.detail ?? null, updated_at: stamp })), ...noteOnly];
   for (let i = 0; i < upserts.length; i += 500) {
     const { error } = await admin.from("player_status").upsert(upserts.slice(i, i + 500), { onConflict: "player_id" });
     if (error) throw error;
   }
-  if (!changes.length) return { entries: entries.length, changes: 0, notes: noteOnly.length };
+  // injury news: notes that changed while the status stayed the same
+  let newsPushed = 0;
+  if (!firstRun) {
+    const news = noteOnly.filter((n) => n.detail && !parsePractice(n.detail, now)).map((n) => ({ playerId: n.player_id, note: n.detail as string }));
+    if (news.length) {
+      const nctx = await loadWatchers(admin, news.map((n) => n.playerId));
+      if (nctx) newsPushed = await deliver(admin, newsAlerts(nctx, news, { now }));
+    }
+  }
+  if (!changes.length) return { entries: entries.length, changes: 0, notes: noteOnly.length, practiceSaved, newsPushed };
   const { data: ev } = await admin.from("status_events")
     .insert(changes.map((c) => ({ player_id: c.playerId, from_status: c.from, to_status: c.to }))).select("id,player_id");
   for (const c of changes) c.eventId = ev?.find((x) => x.player_id === c.playerId)?.id;

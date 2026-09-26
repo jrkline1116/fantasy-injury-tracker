@@ -1,6 +1,6 @@
 /* Fantasy Injury Tracker — app */
 "use strict";
-const APP_VERSION = "2.0.1"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.2.0"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -58,9 +58,9 @@ setInterval(() => { if (document.visibilityState === "visible" && S.loaded && !u
 function renderSignIn(msg) {
   $("nav").hidden = true; $("tabs").innerHTML = "";
   $("view").innerHTML = `<div class="panel setting" style="margin-top:8px">
-    <h2>Sign in</h2><p class="sub">We'll email you a sign-in link. No password needed.</p>
+    <h2>Sign in</h2><p class="sub">We'll email you a sign-in code. No password needed.</p>
     <label class="f" for="em">Email</label><input type="email" id="em" autocomplete="email" placeholder="you@example.com" value="${esc(localStorage.getItem("fit-email") || "")}">
-    <div class="actions"><button class="btn" data-act="sendLink">Email me a link</button></div>
+    <div class="actions"><button class="btn" data-act="sendLink">Email me a code</button></div>
     <div id="authMsg" class="${msg ? "err" : "hint"}">${esc(msg || "")}</div></div>`;
 }
 let resendTimer = null;
@@ -78,13 +78,29 @@ async function sendLink(email) {
   localStorage.setItem("fit-email", email);
   renderLinkSent(email);
 }
+async function verifyCode(btn) {
+  const email = btn.dataset.email, token = ($("otp")?.value || "").replace(/\D/g, "");
+  if (token.length < 6) { $("otpErr").textContent = "Enter the code from the email."; return; }
+  btn.disabled = true; btn.textContent = "Signing in…";
+  const { error } = await sb.auth.verifyOtp({ email, token, type: "email" });
+  if (error) {
+    btn.disabled = false; btn.textContent = "Sign in";
+    $("otpErr").textContent = /expired|invalid/i.test(error.message) ? "That code didn't work or has expired. Check you used the newest email, or tap Resend." : error.message;
+  }
+  // on success, onAuthStateChange loads the app
+}
 function renderLinkSent(email) {
   $("view").innerHTML = `<div class="panel setting sent" style="margin-top:8px">
     <div class="check" aria-hidden="true">✓</div>
     <h2>Check your email</h2>
-    <p>We sent a sign-in link to <b>${esc(email)}</b>.</p>
-    <p class="sub">Open that email on this phone and tap the link. It can take a minute; check spam if it's not there.</p>
+    <p>We sent a sign-in code to <b>${esc(email)}</b>.</p>
+    <label class="f" for="otp">Enter the code from the email</label>
+    <input type="text" id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456" class="otp">
+    <div class="actions"><button class="btn" data-act="verifyCode" data-email="${esc(email)}">Sign in</button></div>
+    <div id="otpErr" class="err"></div>
+    <p class="sub">The email also has a sign-in link, but on iPhone use the code: links open in Safari instead of the app. It can take a minute to arrive; check spam if it's not there.</p>
     <div class="actions"><button class="btn ghost" data-act="resendLink" data-email="${esc(email)}" disabled>Resend in 60s</button><button class="btn ghost" data-act="changeEmail">Use a different email</button></div></div>`;
+  setTimeout(() => $("otp")?.focus(), 50);
   let left = 60;
   clearInterval(resendTimer);
   resendTimer = setInterval(() => {
@@ -141,6 +157,14 @@ async function refresh(silent) {
     ]);
     players.push(...(p.data || [])); statuses.push(...(s.data || []));
   }
+  const since = new Date(Date.now() - 7 * 86400e3).toISOString().slice(0, 10);
+  const practice = [];
+  for (let i = 0; i < ids.length; i += 150) {
+    const { data } = await sb.from("practice_reports").select("player_id,report_date,participation").in("player_id", ids.slice(i, i + 150)).gte("report_date", since).order("report_date");
+    practice.push(...(data || []));
+  }
+  S.practice = new Map();
+  for (const r of practice) { const a = S.practice.get(r.player_id) || []; a.push(r); S.practice.set(r.player_id, a); }
   S.players = new Map(players.map((p) => [p.id, p]));
   S.statuses = new Map(statuses.map((s) => [s.player_id, s]));
   if (!S.teams.find((x) => x.id === S.activeTeam)) S.activeTeam = S.teams[0]?.id || null;
@@ -232,9 +256,11 @@ function viewTeams() {
   if (!t) return `<div class="panel empty"><h2>Add your first team</h2><p>Name it after your league, then fill in your lineup and bench.</p>
     <div class="actions" style="justify-content:center"><button class="btn" data-act="newTeam">Add a team</button></div></div>`;
   const rules = S.rules.filter((x) => x.team_id === t.id);
+  const snoozed = t.bench_snooze_until && new Date(t.bench_snooze_until) > new Date();
+  const benchNote = snoozed ? `<div class="syncbar">Bench alerts ${new Date(t.bench_snooze_until).getFullYear() > 2100 ? "are off" : `snoozed until ${esc(new Date(t.bench_snooze_until).toLocaleDateString([], { weekday: "short" }))}`}. <button class="linkbtn" data-act="benchOn">Turn back on</button></div>` : "";
   const rulesSec = rules.length ? `<h2>If/then rules this week</h2><div class="panel">${rules.map(rowRule).join("")}</div>` : "";
   const rows = lineupRows(t).filter((x) => !synced(t) || x.r);
-  return (synced(t) ? syncBar(t) : "") + `<div class="panel lineup${synced(t) ? " locked" : ""}">${rows.map(rowLineup).join("") || `<div class="note">No players yet. Tap Sync now after your league drafts.</div>`}
+  return (synced(t) ? syncBar(t) : "") + benchNote + `<div class="panel lineup${synced(t) ? " locked" : ""}">${rows.map(rowLineup).join("") || `<div class="note">No players yet. Tap Sync now after your league drafts.</div>`}
       ${synced(t) ? "" : `<button class="row addrow" data-act="addRow">+ Add another player</button>`}</div>
     <div class="actions"><button class="btn ghost" data-act="addRule">Add if/then rule</button><button class="btn ghost" data-act="teamSettings">Team settings</button></div>` + rulesSec;
 }
@@ -277,10 +303,17 @@ async function runGridSearch(i, q, slot) {
     : `<div class="note">No ${SLOT_POS[slot] ? esc(SLOTS.find((x) => x[0] === slot)[1]) + " " : ""}players match.</div>`;
 }
 const short = (p) => { if (p.pos === "DEF") return p.full_name; const t = p.full_name.split(/\s+/).filter((x) => !/^(jr|sr|ii|iii|iv|v)\.?$/i.test(x)); return t.length > 1 ? t[t.length - 1] : p.full_name; };
+const PRAC = { DNP: "DNP", LP: "Limited", FP: "Full" };
+function practiceLine(pid) {
+  const rows = S.practice?.get(pid);
+  if (!rows?.length) return "";
+  return `<span class="prac">Practice: ${rows.map((r) => `${new Date(r.report_date + "T12:00:00").toLocaleDateString([], { weekday: "short" })} <b class="p-${r.participation}">${PRAC[r.participation]}</b>`).join(" · ")}</span>`;
+}
 function noteBlock(pid) {
   const st = S.statuses.get(pid);
-  if (!st?.detail) return "";
-  return `<div class="pnote">${esc(st.detail)}<span class="when">Updated ${esc(when(st.updated_at))}</span></div>`;
+  const prac = practiceLine(pid);
+  if (!st?.detail) return prac ? `<div class="pnote">${prac}</div>` : "";
+  return `<div class="pnote">${esc(st.detail)}${prac}<span class="when">Updated ${esc(when(st.updated_at))}</span></div>`;
 }
 function ruleText(rule) {
   const tp = P(rule.trigger_player_id), a = P(rule.start_player_id), b = P(rule.over_player_id);
@@ -311,7 +344,7 @@ function viewAlerts() {
       <div class="grid2" style="margin-top:8px"><select id="simS" aria-label="New status">${Object.keys(STATUS).map((k) => `<option value="${k}"${k === "O" ? " selected" : ""}>${STATUS[k][0]}</option>`).join("")}</select><button class="btn small" data-act="simulate">Simulate</button></div>` : ""}
     </div>`;
   const list = S.alerts.length
-    ? `<div class="panel">${S.alerts.map((a) => `<div class="alert"><div class="head">${a.status ? badge(a.status, 1) : `<span class="st T sm">${a.kind === "pregame" ? "T-" : a.kind === "bye" ? "BYE" : a.kind === "roster" ? "SYNC" : "TEST"}</span>`}<span class="ttl">${esc(a.title)}</span><span class="time">${esc(when(a.created_at))}</span></div>
+    ? `<div class="panel">${S.alerts.map((a) => `<div class="alert"><div class="head">${a.status ? badge(a.status, 1) : `<span class="st T sm">${a.kind === "pregame" ? "T-" : a.kind === "bye" ? "BYE" : a.kind === "roster" ? "SYNC" : a.kind === "practice" ? "PRAC" : a.kind === "news" ? "NEWS" : "TEST"}</span>`}<span class="ttl">${esc(a.title)}</span><span class="time">${esc(when(a.created_at))}</span></div>
         <ul>${(a.lines || []).map((l) => `<li>${l.team ? `<span class="tm">${esc(l.team)}:</span> ` : ""}${esc(l.text)}</li>`).join("")}</ul>
         ${a.held_until && !a.pushed_at ? `<div class="held">Held until ${esc(new Date(a.held_until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))} for quiet hours</div>` : ""}</div>`).join("")}</div>
        <div class="actions"><button class="btn ghost small" data-act="clearAlerts">Clear alert history</button></div>`
@@ -334,12 +367,16 @@ function viewSettings() {
   <h2>Alerts</h2><p class="sub">The default for every team. Teams, players, and links can override it.</p>
   <div class="panel">
     <div class="setting">${seg("mode", s.mode, MODES)}
-      <div class="hint">${s.mode === "impact" ? "Alerts when a player is ruled out (Out, IR, suspended) or cleared to play. Skips new Questionable and Doubtful tags." : s.mode === "all" ? "Every status change, including Questionable and Doubtful." : "No status alerts. Pre-game and bye checks still follow their own switches."}</div></div>
+      <div class="hint">${s.mode === "impact" ? "Alerts when a player is ruled out (Out, IR, suspended) or cleared to play. Skips new Questionable and Doubtful tags." : s.mode === "all" ? "Every status change, including Questionable and Doubtful. Turn down to Out or cleared for fewer alerts." : "No status alerts. Pre-game and bye checks still follow their own switches."}</div></div>
     <div class="setting"><div class="top"><span class="t">Pre-game check</span><input type="checkbox" class="switch" data-toggle="tx_on" aria-label="Pre-game check" ${s.tx_on ? "checked" : ""}></div>
       <div class="tx"><output id="txOut">T-${s.tx_minutes}</output><input type="range" min="5" max="120" step="5" value="${s.tx_minutes}" data-range="tx_minutes" aria-label="Minutes before kickoff" ${s.tx_on ? "" : "disabled"}></div>
       <div class="hint">One summary this many minutes before each kickoff window, covering starters playing in it. Inactive lists come out about 90 minutes before.</div></div>
     <div class="setting"><div class="top"><span class="t">Upside alerts</span><input type="checkbox" class="switch" data-toggle="upside" aria-label="Upside alerts" ${s.upside ? "checked" : ""}></div>
       <div class="hint">Handcuff and bench opportunities, like "starter out, start your backup."</div></div>
+    <div class="setting"><div class="top"><span class="t">Injury news</span><input type="checkbox" class="switch" data-toggle="news" aria-label="Injury news" ${s.news !== false ? "checked" : ""}></div>
+      <div class="hint">An alert whenever the injury report changes for a hurt player you have or are watching, even if his status didn't change.</div></div>
+    <div class="setting"><div class="top"><span class="t">Practice reports</span><input type="checkbox" class="switch" data-toggle="practice" aria-label="Practice reports" ${s.practice !== false ? "checked" : ""}></div>
+      <div class="hint">One evening summary on practice days: who didn't practice, was limited, or went full, for your players and the players they depend on.</div></div>
     <div class="setting"><div class="top"><span class="t">Bye-week warning</span><input type="checkbox" class="switch" data-toggle="bye" aria-label="Bye-week warning" ${s.bye ? "checked" : ""}></div>
       <div class="hint">Thursday at 9am when a starter's team is on bye.</div></div>
     <div class="setting"><div class="top"><span class="t">Quiet hours</span><input type="checkbox" class="switch" data-toggle="quiet_on" aria-label="Quiet hours" ${s.quiet_on ? "checked" : ""}></div>
@@ -381,12 +418,29 @@ function manualTeamDlg() {
     <div class="actions"><button class="btn" data-act="saveTeam">Create team</button></div><div id="dlgErr" class="err"></div>`);
   setTimeout(() => $("tn")?.focus(), 50);
 }
+function benchSelect(t) {
+  const until = t.bench_snooze_until ? new Date(t.bench_snooze_until) : null;
+  const state = !until || until < new Date() ? "on" : until.getFullYear() > 2100 ? "off" : "snooze";
+  return `<select id="tbench">
+    <option value="on"${state === "on" ? " selected" : ""}>On</option>
+    <option value="snooze"${state === "snooze" ? " selected" : ""}>${state === "snooze" ? `Snoozed until ${esc(until.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }))}` : "Snooze until Tuesday"}</option>
+    <option value="off"${state === "off" ? " selected" : ""}>Off</option></select>
+    <div class="hint">Snooze quiets injury, news, and practice alerts for bench players through this week's games. Starters and your if/then rules still alert.</div>`;
+}
+function benchValue(v, current) {
+  if (v === "on") return null;
+  if (v === "off") return "2999-12-31T00:00:00Z";
+  const cur = current ? new Date(current) : null;
+  if (cur && cur > new Date() && cur.getFullYear() < 2100) return current; // keep an existing snooze
+  return nextTuesday().toISOString();
+}
 function teamSettingsDlg() {
   const t = team();
   if (synced(t)) return syncedSettingsDlg(t);
   openDlg(`<h3>Team settings</h3>
     <label class="f" for="tn">Team name</label><input type="text" id="tn" value="${esc(t.name)}" maxlength="40">
     <label class="f" for="tnot">Alerts for this team</label>${notifySelect("tnot", t.notify, ["inherit", "all", "impact", "off"], `Use default (${MODES[S.settings.mode]})`)}
+    <label class="f" for="tbench">Bench player alerts</label>${benchSelect(t)}
     <div class="actions"><button class="btn" data-act="saveTeamSettings">Save changes</button><button class="btn danger" data-act="deleteTeam">Delete team</button></div><div id="dlgErr" class="err"></div>`);
 }
 
@@ -397,6 +451,7 @@ async function syncedSettingsDlg(t) {
   openDlg(`<h3>Team settings</h3>
     <label class="f" for="tn">Team name in this app</label><input type="text" id="tn" value="${esc(t.name)}" maxlength="40">
     <label class="f" for="tnot">Alerts for this team</label>${notifySelect("tnot", t.notify, ["inherit", "all", "impact", "off"], `Use default (${MODES[S.settings.mode]})`)}
+    <label class="f" for="tbench">Bench player alerts</label>${benchSelect(t)}
     <div class="actions"><button class="btn" data-act="saveTeamSettings">Save changes</button></div>
     <h2>League sync</h2>
     <div class="panel note">${esc(PLATFORM[m.platform] || "")} · ${esc(m.leagueName || "")} · your team: ${esc(m.teamName || "")}<br>
@@ -681,12 +736,14 @@ document.addEventListener("click", async (e) => {
     switch (a.dataset.act) {
       case "sendLink": return sendLink();
       case "resendLink": return sendLink(a.dataset.email);
+      case "verifyCode": return verifyCode(a);
       case "changeEmail": return renderSignIn();
       case "closeDlg": return closeDlg();
       case "applyUpdate": S.waitingSW?.postMessage("skipWaiting"); return;
       case "enablePush": return enablePush();
       case "newTeam": return newTeamDlg();
       case "manualTeam": return manualTeamDlg();
+      case "benchOn": { t.bench_snooze_until = null; render(); bg(sb.from("user_teams").update({ bench_snooze_until: null }).eq("id", t.id)); return; }
       case "linkEspn": return espnDlg();
       case "linkSleeper": return sleeperDlg();
       case "joinManual": return joinManualDlg();
@@ -760,9 +817,9 @@ document.addEventListener("click", async (e) => {
       case "teamSettings": return teamSettingsDlg();
       case "saveTeamSettings": {
         const name = $("tn").value.trim() || t.name;
-        const notify = $("tnot").value;
-        Object.assign(t, { name, notify }); closeDlg(); render();
-        bg(sb.from("user_teams").update({ name, notify }).eq("id", t.id)); return;
+        const notify = $("tnot").value, bench_snooze_until = $("tbench") ? benchValue($("tbench").value, t.bench_snooze_until) : t.bench_snooze_until;
+        Object.assign(t, { name, notify, bench_snooze_until }); closeDlg(); render();
+        bg(sb.from("user_teams").update({ name, notify, bench_snooze_until }).eq("id", t.id)); return;
       }
       case "deleteTeam":
         if (!confirm(`Delete ${t.name}? Its players and links will be removed.`)) return;
@@ -841,6 +898,7 @@ document.addEventListener("change", async (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;
   if (e.target.id === "em") sendLink();
+  else if (e.target.id === "otp") document.querySelector('[data-act="verifyCode"]')?.click();
   else if (e.target.id === "su") document.querySelector('[data-act="sleeperFind"]')?.click();
   else if (e.target.id === "tn") document.querySelector('[data-act="saveTeam"],[data-act="saveTeamSettings"]')?.click();
 });

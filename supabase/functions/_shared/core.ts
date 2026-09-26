@@ -69,7 +69,7 @@ export type Settings = {
   quiet_on: boolean; quiet_start: string; quiet_end: string; timezone: string;
 };
 export const defaultSettings = (user_id: string): Settings => ({
-  user_id, mode: "impact", tx_on: true, tx_minutes: 10, upside: true, bye: true,
+  user_id, mode: "all", tx_on: true, tx_minutes: 10, upside: true, bye: true,
   quiet_on: true, quiet_start: "22:00", quiet_end: "07:00", timezone: "America/Phoenix",
 });
 export function localClock(tz: string, d = new Date()): { min: number; weekday: string } {
@@ -209,6 +209,50 @@ function ruleLine(ctx: Ctx, rule: any): string | null {
   return `RULE → start ${sa} over ${sb}`;
 }
 
+export function benchSnoozed(team: any, now = new Date()) {
+  return !!team.bench_snooze_until && new Date(team.bench_snooze_until).getTime() > now.getTime();
+}
+
+/** Injury news: a watched injured player's report changed (same status). One alert per player per new note. */
+export function newsAlerts(ctx: Ctx, items: { playerId: string; note: string }[], opts: { now: Date }): AlertRow[] {
+  const out: AlertRow[] = [];
+  const hash = (t: string) => { let h = 0; for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+  for (const it of items) {
+    const pl = ctx.players.get(it.playerId);
+    const status = ctx.statuses.get(it.playerId) ?? "ACT";
+    if (!pl || !it.note || status === "ACT") continue;
+    const byUser = new Map<string, Line[]>();
+    for (const t of ctx.teams) {
+      const st = ctx.settings.get(t.user_id)!;
+      if ((st as any).news === false) continue;
+      const benchQuiet = benchSnoozed(t, opts.now);
+      const add = (text: string) => { const a = byUser.get(t.user_id) ?? []; a.push({ team: t.name, text }); byUser.set(t.user_id, a); };
+      const troster = ctx.roster.filter((r) => r.team_id === t.id);
+      for (const r of troster.filter((r) => r.player_id === it.playerId)) {
+        if (r.slot === "bench" && benchQuiet) continue;
+        const lv = level(st, t, r, null);
+        if (lv === "off" || lv === "mute") continue;
+        add(`${r.slot === "start" ? "In your lineup" : "On your bench"} · ${it.note}`);
+      }
+      for (const l of ctx.links.filter((x) => x.team_id === t.id && x.player_id === it.playerId)) {
+        const r = troster.find((x) => x.id === l.roster_id), fp = r && ctx.players.get(r.player_id);
+        if (!r || !fp || (r.slot === "bench" && benchQuiet)) continue;
+        const lv = level(st, t, r, l);
+        if (lv === "off" || lv === "mute") continue;
+        add(`→ watch ${names(pl, fp)[1]} · ${it.note}`);
+      }
+    }
+    for (const [uid, lines] of byUser) {
+      const held = quietHoldUntil(ctx.settings.get(uid)!, opts.now);
+      out.push({
+        user_id: uid, kind: "news", status, title: `${shortName(pl)} ${pl.pos}, ${pl.team ?? "FA"} · ${word(status)} · update`,
+        lines, dedupe_key: `news:${uid}:${it.playerId}:${hash(it.note)}`, held_until: held ? held.toISOString() : null, push: true,
+      });
+    }
+  }
+  return out;
+}
+
 export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; test?: boolean }): AlertRow[] {
   const out: AlertRow[] = [];
   for (const ch of changes) {
@@ -225,6 +269,7 @@ export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; tes
       };
       const troster = ctx.roster.filter((r) => r.team_id === t.id);
       const tlinks = ctx.links.filter((l) => l.team_id === t.id);
+      const benchQuiet = benchSnoozed(t, opts.now);
 
       // 1. your if/then rules (always fire; they're explicit)
       let ruleFired = false;
@@ -238,6 +283,7 @@ export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; tes
 
       // 2. the trigger is on your roster
       for (const r of troster.filter((r) => r.player_id === ch.playerId)) {
+        if (r.slot === "bench" && benchQuiet) continue;
         if (!wants(level(st, t, r, null), ch.from, ch.to)) continue;
         const starting = r.slot === "start";
         const where = starting ? "In your lineup" : "On your bench";
@@ -267,6 +313,7 @@ export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; tes
         const r = troster.find((x) => x.id === l.roster_id);
         const fp = r && ctx.players.get(r.player_id);
         if (!r || !fp) continue;
+        if (r.slot === "bench" && benchQuiet) continue;
         if (!wants(level(st, t, r, l), ch.from, ch.to)) continue;
         const [trig, f] = names(pl, fp);
         const starting = r.slot === "start";
