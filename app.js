@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.5.10"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.5.11"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -257,6 +257,14 @@ function renderBanner() {
   const b = $("banner");
   if (S.waitingSW) { b.innerHTML = `<div class="bannerbox"><span>A new version is ready.</span><button class="btn small" data-act="applyUpdate">Update now</button></div>`; return; }
   if (S.pushState === "off" && S.view !== "settings") { b.innerHTML = `<div class="bannerbox"><span>Turn on notifications to get alerts on this device.</span><button class="btn small" data-act="enablePush">Turn on</button></div>`; return; }
+  // iPhone in Safari (not the home-screen app): alerts can't work here. Remind on every visit until they add it.
+  let iosOff = false;
+  try { iosOff = sessionStorage.getItem("fit-ios-banner") === "off"; } catch { /* ignore */ }
+  if (!iosOff && iosBrowser()) {
+    b.innerHTML = `<div class="bannerbox"><span><b>On iPhone?</b> Add this to your Home Screen to get alerts. They don't work in Safari.</span>
+      <span style="display:flex;gap:6px;flex-shrink:0"><button class="btn small" data-act="iosHow">Show me how</button><button class="btn ghost small" data-act="iosDismiss" aria-label="Hide this">✕</button></span></div>`;
+    return;
+  }
   // Android in Chrome (not the Play app): invite them into the Play closed test.
   // ✕ hides it only until the next visit (session), so it comes back every time they open the site.
   let androidOff = false;
@@ -408,10 +416,17 @@ function trackedPlayers() {
 const seg = (key, val, opts) => `<div class="seg" role="group">${Object.entries(opts).map(([k, v]) => `<button data-seg="${key}" data-val="${k}" aria-pressed="${val === k}">${v}</button>`).join("")}</div>`;
 function viewSettings() {
   const s = S.settings;
-  const pushLine = { on: "On for this device.", off: "Off for this device.", denied: "Blocked. Allow notifications for this site in Chrome's site settings, then reload.", unsupported: "This browser can't receive push notifications. On Android, use Chrome and add the app to your home screen.", unknown: "Checking…" }[S.pushState];
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const pushLine = {
+    on: "On for this device.",
+    off: "Off for this device.",
+    denied: ios ? "Blocked. Turn them on in iPhone Settings > Notifications > Injury Assist, then reopen the app." : "Blocked. Allow notifications for this site in Chrome's site settings, then reload.",
+    unsupported: iosBrowser() ? "Alerts don't work in Safari. Add this to your Home Screen (Share > Add to Home Screen), open it from there, and turn notifications on. Needs iOS 16.4 or newer." : "This browser can't receive push notifications. On Android, use Chrome or the Play Store app.",
+    unknown: "Checking…",
+  }[S.pushState];
   return `<h2>This device</h2>
   <div class="panel"><div class="setting"><div class="top"><span class="t">Push notifications</span>
-    ${S.pushState === "off" ? `<button class="btn small" data-act="enablePush">Turn on</button>` : S.pushState === "on" ? `<button class="btn ghost small" data-act="testPush">Test</button>` : ""}</div>
+    ${S.pushState === "off" ? `<button class="btn small" data-act="enablePush">Turn on</button>` : S.pushState === "on" ? `<button class="btn ghost small" data-act="testPush">Test</button>` : iosBrowser() ? `<button class="btn small" data-act="iosHow">Show me how</button>` : ""}</div>
     <div class="hint">${esc(pushLine)}</div></div></div>
   <h2>Alerts</h2><p class="sub">The default for every team. Teams, players, and links can override it.</p>
   <div class="panel">
@@ -915,6 +930,8 @@ document.addEventListener("click", async (e) => {
       case "linkSleeper": return sleeperDlg();
       case "linkYahoo": return yahooDlg();
       // Yahoo now requires approval for its Fantasy API; switch the button back to linkYahoo once approved
+      case "iosHow": return iosNextStepsDlg("Get alerts on iPhone");
+      case "iosDismiss": try { sessionStorage.setItem("fit-ios-banner", "off"); } catch { /* ignore */ } return renderBanner();
       case "androidDismiss": try { sessionStorage.setItem("fit-android-banner", "off"); } catch { /* ignore */ } return renderBanner();
       case "yahooSoon": return toast("Yahoo is coming soon", "Yahoo is reviewing our access request. Until then, add your Yahoo team by hand with Enter a team by hand.");
       case "yahooSignIn": return yahooSignIn(a);
