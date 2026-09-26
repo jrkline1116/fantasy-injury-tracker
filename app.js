@@ -1,6 +1,6 @@
 /* Fantasy Injury Tracker — app */
 "use strict";
-const APP_VERSION = "2.3.0"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.3.1"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -415,8 +415,8 @@ function newTeamDlg() {
   openDlg(`<h3>Add a team</h3><p class="sub">Linked teams stay in sync automatically: trades, pickups, and lineup moves.</p>
     <div class="actions" style="flex-direction:column;align-items:stretch">
       <button class="btn" data-act="linkEspn">Link an ESPN league</button>
-      <button class="btn" data-act="linkSleeper">Link a Sleeper league</button>
-      <button class="btn" data-act="linkYahoo">Link a Yahoo league</button>
+      <button class="btn" data-act="linkSleeper">Link a Sleeper league (beta)</button>
+      <button class="btn" data-act="linkYahoo">Link a Yahoo league (beta)</button>
       <button class="btn ghost" data-act="joinManual">Join with an invite link</button>
       <button class="btn ghost" data-act="manualTeam">Enter a team by hand</button>
     </div>`);
@@ -476,34 +476,41 @@ async function syncedSettingsDlg(t) {
 }
 
 /* ---------- league linking ---------- */
+const COMMISH_MSG = "Can you make our ESPN fantasy league viewable to the public? I want to link it to an injury-alert app. On ESPN's website (not the app): open our league, click LM Tools, then Basic Settings, then Edit. Set \"Make League Viewable to Public\" to Yes and click Save. It only lets people with the league link see rosters. Nothing else changes.";
 function espnDlg(prefill = {}) {
   const priv = !!prefill.reconnect || !!prefill.private;
   openDlg(`<h3>${prefill.reconnect ? "Reconnect ESPN" : "Link an ESPN league"}</h3>
-    ${prefill.reconnect ? `<p class="sub">ESPN stopped accepting the saved login. Paste fresh cookies below (steps included).</p>` :
-    `<div class="tipbox">Someone in your league already linked it? Ask them for the <b>invite link</b> instead. You won't need any of this.</div>`}
+    ${prefill.reconnect ? `<p class="sub">ESPN stopped accepting the saved login. Copy fresh cookies (steps below) and tap Reconnect.</p>` :
+    `<div class="tipbox">Someone in your league already linked it? Ask them for the <b>invite link</b> instead. You won't need any of this.</div>
+    <p class="sub">Most leagues take one step: paste the league's address and tap <b>Link league</b>. If your league is private, the app will say so and show two ways to finish.</p>`}
 
-    <div class="stepnum">Step 1 · Your league's web address</div>
+    <div class="stepnum">Step 1 · Your league's address</div>
     <label class="f" for="elg">League URL</label>
     <input type="text" id="elg" placeholder="https://fantasy.espn.com/football/league?leagueId=…" value="${esc(prefill.league || "")}" ${prefill.reconnect ? "readonly" : ""} autocomplete="off" autocapitalize="off" spellcheck="false">
-    ${prefill.reconnect ? "" : `<details class="howto"><summary>Where do I find it?</summary><ol>
-      <li>In a web browser (not the ESPN app), go to <b>fantasy.espn.com</b> and sign in.</li>
-      <li>Open your league so you see your team or the standings.</li>
-      <li>Copy the whole address from the address bar. It contains <b>leagueId=</b> followed by numbers.</li>
-      <li>Paste it above. Just the number works too.</li></ol></details>`}
+    ${prefill.reconnect ? "" : `<details class="howto"><summary>Where do I find it?</summary>
+      <p><b>On a phone</b> (the ESPN app doesn't show it):</p><ol>
+      <li>Open <b>Safari</b> or <b>Chrome</b> and go to <b>fantasy.espn.com</b>. If it offers to open the ESPN app, stay in the browser.</li>
+      <li>Sign in and tap your league so you see your team or the standings.</li>
+      <li>Tap the address bar and copy the whole address. It contains <b>leagueId=</b> followed by numbers.</li>
+      <li>Come back here and paste it above.</li></ol>
+      <p><b>On a computer:</b> open your league at <b>fantasy.espn.com</b>, copy the address bar, and paste it (texting it to yourself works).</p>
+      <p class="sub">Just the leagueId number works too.</p></details>`}
 
     <div id="privBox" ${priv ? "" : "hidden"}>
-      <div class="stepnum">Step 2 · Private league access</div>
-      ${prefill.private ? `<p class="warnbox">This league is private, so ESPN needs proof you're in it. Pick one option.</p>` : ""}
-      ${prefill.reconnect ? "" : `<details class="howto"><summary><b>Easiest:</b> have your commissioner make the league public</summary>
-        <p>The commissioner opens the league on ESPN's website, goes to <b>League → Settings → Basic Settings</b>, and turns on <b>Make League Viewable to Public</b>. Rosters become viewable by link (nothing else changes). Then tap <b>Link league</b> again with just the URL.</p></details>`}
-      <details class="howto" ${prefill.reconnect ? "open" : ""}><summary><b>Or:</b> copy two ESPN cookies (about 2 minutes, needs a computer)</summary><ol>
+      <div class="stepnum">Step 2 · ${prefill.reconnect ? "Fresh ESPN cookies" : "Private league: pick one"}</div>
+      ${prefill.private ? `<p class="warnbox">This league is private, so ESPN won't show its rosters without permission.</p>` : ""}
+      ${prefill.reconnect ? "" : `<details class="howto" open><summary><b>Option A (easiest):</b> ask your commissioner to make the league public</summary>
+        <p>It takes them about 30 seconds on ESPN's website: <b>LM Tools → Basic Settings → Edit → Make League Viewable to Public → Yes → Save</b>. Rosters become viewable to anyone with the league link. Nothing else about the league changes.</p>
+        <div class="actions"><button class="btn small" data-act="askCommish">Send your commissioner the steps</button></div>
+        <p class="sub">Once they've done it, come back and tap <b>Link league</b> with just the address. No cookies needed.</p></details>`}
+      <details class="howto" ${prefill.reconnect ? "open" : ""}><summary><b>${prefill.reconnect ? "How to copy them" : "Option B:"}</b>${prefill.reconnect ? "" : " copy two ESPN cookies yourself (about 2 minutes, needs a computer)"}</summary><ol>
         <li>On a computer, open <b>Chrome</b>, go to <b>fantasy.espn.com</b>, and make sure you're signed in.</li>
-        <li>Press <b>F12</b>. A developer panel opens on the side.</li>
-        <li>At the top of that panel, click the <b>»</b> arrows next to <b>Console</b> and choose <b>Application</b>.</li>
+        <li>Press <b>F12</b> (Mac: <b>Cmd + Option + I</b>). A developer panel opens.</li>
+        <li>At the top of that panel, click <b>Application</b>. If you don't see it, click the <b>»</b> arrows first.</li>
         <li>In its left sidebar under <b>Storage</b>, expand <b>Cookies</b> and click <b>https://fantasy.espn.com</b>.</li>
-        <li>In the <b>Filter</b> box type <b>espn_s2</b>. Click the row; the full value appears below. Copy all of it into <b>espn_s2</b> here.</li>
-        <li>Change the filter to <b>SWID</b> and copy that value, curly braces included, into <b>SWID</b> here.</li></ol>
-        <p class="sub">These act like a login to your ESPN fantasy account, so don't share them in screenshots. The app stores them encrypted and only uses them to read rosters. Easier: paste them into a text or email to yourself, then copy them on your phone.</p></details>
+        <li>In the <b>Filter</b> box type <b>espn_s2</b>. Click that row; its full value appears at the bottom. Copy all of it into <b>espn_s2</b> below.</li>
+        <li>Change the filter to <b>SWID</b> and copy that value, curly braces included, into <b>SWID</b> below.</li></ol>
+        <p class="sub">To get them onto your phone, email or text them to yourself. They work like a login to your ESPN fantasy account, so don't post them in screenshots. The app stores them encrypted and only uses them to read rosters.</p></details>
       <label class="f" for="es2">espn_s2</label><input type="text" id="es2" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="AEB…  (long)">
       <label class="f" for="esw">SWID</label><input type="text" id="esw" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}">
     </div>
@@ -513,17 +520,17 @@ function espnDlg(prefill = {}) {
     <div id="dlgErr" class="err"></div>`);
 }
 function sleeperDlg() {
-  openDlg(`<h3>Link a Sleeper league</h3>
+  openDlg(`<h3>Link a Sleeper league <span class="tag">Beta</span></h3>
     <label class="f" for="su">Sleeper username</label><input type="text" id="su" autocomplete="off" autocapitalize="off">
     <div class="actions"><button class="btn" data-act="sleeperFind">Find my leagues</button></div><div id="sleeperOut"></div><div id="dlgErr" class="err"></div>`);
   setTimeout(() => $("su")?.focus(), 50);
 }
 function yahooDlg(msg) {
   S.yahooWaiting = false;
-  openDlg(`<h3>Link a Yahoo league</h3><p class="sub">Loading…</p>`);
+  openDlg(`<h3>Link a Yahoo league <span class="tag">Beta</span></h3><p class="sub">Loading…</p>`);
   api("yahooLeagues").then((r) => {
     if (!r.connected) {
-      openDlg(`<h3>Link a Yahoo league</h3>
+      openDlg(`<h3>Link a Yahoo league <span class="tag">Beta</span></h3>
         <p class="sub">Sign in on Yahoo's page and tap <b>Agree</b> to let this app read your fantasy rosters. It can't change anything, and your Yahoo password never reaches this app.</p>
         ${msg || r.note ? `<p class="warnbox">${esc(msg || r.note)}</p>` : ""}
         <div class="actions"><button class="btn" data-act="yahooSignIn">Sign in with Yahoo</button></div>
@@ -531,13 +538,13 @@ function yahooDlg(msg) {
         <div id="dlgErr" class="err"></div>`);
       return;
     }
-    openDlg(`<h3>Link a Yahoo league</h3>
+    openDlg(`<h3>Link a Yahoo league <span class="tag">Beta</span></h3>
       ${msg ? `<p class="warnbox">${esc(msg)}</p>` : ""}
       ${r.leagues.length ? `<h2>Your ${esc(r.season)} leagues</h2><div class="panel">${r.leagues.map((l) => `<div class="row"><span class="who"><span class="name">${esc(l.name)}</span><br><span class="meta">${esc(l.teams)} teams${r.alreadyLinked.includes(l.id) ? " · already linked by someone" : ""}</span></span><button class="btn small" data-act="yahooLink" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Link</button></div>`).join("")}</div>`
         : `<p class="sub">No ${esc(r.season)} Yahoo football leagues on this Yahoo account.</p>`}
       <div class="actions"><button class="btn ghost small" data-act="yahooSignIn">Use a different Yahoo account</button></div>
       <div id="dlgErr" class="err"></div>`);
-  }).catch((e) => openDlg(`<h3>Link a Yahoo league</h3><p class="err">${esc(e.message)}</p>`));
+  }).catch((e) => openDlg(`<h3>Link a Yahoo league <span class="tag">Beta</span></h3><p class="err">${esc(e.message)}</p>`));
 }
 function yahooReturn() {
   const p = S.pendingYahoo; S.pendingYahoo = null;
@@ -818,6 +825,11 @@ document.addEventListener("click", async (e) => {
           if (/private/i.test(err.message) && !s2) { espnDlg({ league, private: true }); return; }
           throw err;
         } finally { if ($("elg")) { a.disabled = false; a.textContent = "Link league"; } }
+      }
+      case "askCommish": {
+        if (navigator.share) { try { await navigator.share({ text: COMMISH_MSG }); } catch { /* cancelled */ } return; }
+        await navigator.clipboard?.writeText(COMMISH_MSG);
+        return toast("Message copied", "Paste it into a text or the league chat.");
       }
       case "espnPrivate": { $("privBox").hidden = false; a.remove(); return; }
       case "reconnectEspn": return espnDlg({ reconnect: true, league: a.dataset.ext });
