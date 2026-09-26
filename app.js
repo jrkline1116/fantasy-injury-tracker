@@ -1,6 +1,6 @@
 /* Fantasy Injury Tracker — app */
 "use strict";
-const APP_VERSION = "2.2.0"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.3.0"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -45,19 +45,26 @@ if (!CONFIGURED) {
 function readHash() {
   const h = (location.hash || "#teams").slice(1);
   const m = h.match(/^join=([A-Za-z0-9]+)/);
+  const y = h.match(/^yahoo=(ok|err:(.*))$/);
   if (m) { S.pendingJoin = m[1]; history.replaceState(null, "", location.pathname + "#teams"); S.view = "teams"; }
+  else if (y) { S.pendingYahoo = { err: y[2] ? decodeURIComponent(y[2]) : "" }; history.replaceState(null, "", location.pathname + "#teams"); S.view = "teams"; }
   else S.view = h;
 }
 readHash();
-window.addEventListener("hashchange", () => { readHash(); if (S.loaded) { render(); if (S.pendingJoin) joinDlg(); } });
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.loaded && !userBusy()) refresh(); });
+window.addEventListener("hashchange", () => { readHash(); if (S.loaded) { render(); if (S.pendingJoin) joinDlg(); else if (S.pendingYahoo) yahooReturn(); } });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !S.loaded) return;
+  if (S.yahooWaiting && dlg.open) return yahooDlg(); // back from Yahoo's sign-in page
+  if (!userBusy()) refresh();
+});
 const userBusy = () => dlg.open || ["INPUT", "SELECT"].includes(document.activeElement?.tagName);
 setInterval(() => { if (document.visibilityState === "visible" && S.loaded && !userBusy()) refresh(); }, 60000);
 
 /* ---------------- auth ---------------- */
 function renderSignIn(msg) {
   $("nav").hidden = true; $("tabs").innerHTML = "";
-  $("view").innerHTML = `<div class="panel setting" style="margin-top:8px">
+  const y = S.pendingYahoo;
+  $("view").innerHTML = `${y ? `<div class="panel note" style="margin-top:8px">${y.err ? `Yahoo sign-in didn't finish: ${esc(y.err)}` : "<b>Yahoo is connected.</b>"} Close this window to go back to the app${y.err ? " and try again" : ", where your Yahoo leagues are ready to link"}.</div>` : ""}<div class="panel setting" style="margin-top:8px">
     <h2>Sign in</h2><p class="sub">We'll email you a sign-in code. No password needed.</p>
     <label class="f" for="em">Email</label><input type="email" id="em" autocomplete="email" placeholder="you@example.com" value="${esc(localStorage.getItem("fit-email") || "")}">
     <div class="actions"><button class="btn" data-act="sendLink">Email me a code</button></div>
@@ -122,6 +129,7 @@ async function loadAll() {
     await checkPush();
     render();
     if (S.pendingJoin) joinDlg();
+    else if (S.pendingYahoo) yahooReturn();
   } catch (e) { showError(e); }
 }
 async function ensureSettings() {
@@ -236,7 +244,7 @@ function syncBar(t) {
   const m = S.leagueMeta[t.id];
   if (!m || m.loading) { loadLeagueMeta(t); return `<div class="syncbar">Synced from your league…</div>`; }
   if (m.error || m.missing) return `<div class="syncbar warn">Couldn't load league info. <button class="linkbtn" data-act="syncNow">Try again</button></div>`;
-  if (m.status === "reconnect") return `<div class="syncbar warn">${m.isLinker ? `${esc(PLATFORM[m.platform])} needs you to reconnect.` : "Sync paused: the league's ESPN login expired."} <button class="linkbtn" data-act="teamSettings">${m.isLinker ? "Reconnect" : "Details"}</button></div>`;
+  if (m.status === "reconnect") return `<div class="syncbar warn">${m.isLinker ? `${esc(PLATFORM[m.platform])} needs you to reconnect.` : `Sync paused: the league's ${esc(PLATFORM[m.platform])} login expired.`} <button class="linkbtn" data-act="teamSettings">${m.isLinker ? "Reconnect" : "Details"}</button></div>`;
   return `<div class="syncbar">Synced from ${esc(PLATFORM[m.platform])} · ${esc(m.leagueName)} · ${m.syncedAt ? esc(ago(m.syncedAt)) : "just now"} <button class="linkbtn" data-act="syncNow">Sync now</button>${m.isLinker ? ` <button class="linkbtn" data-act="shareInvite" data-code="${esc(m.inviteCode)}">Invite league</button>` : ""}${m.unmatched?.length ? `<br><span class="warn">${m.unmatched.length} player${m.unmatched.length === 1 ? "" : "s"} couldn't be matched: ${esc(m.unmatched.join(", "))}</span>` : ""}</div>`;
 }
 function ago(ts) {
@@ -408,6 +416,7 @@ function newTeamDlg() {
     <div class="actions" style="flex-direction:column;align-items:stretch">
       <button class="btn" data-act="linkEspn">Link an ESPN league</button>
       <button class="btn" data-act="linkSleeper">Link a Sleeper league</button>
+      <button class="btn" data-act="linkYahoo">Link a Yahoo league</button>
       <button class="btn ghost" data-act="joinManual">Join with an invite link</button>
       <button class="btn ghost" data-act="manualTeam">Enter a team by hand</button>
     </div>`);
@@ -457,8 +466,9 @@ async function syncedSettingsDlg(t) {
     <div class="panel note">${esc(PLATFORM[m.platform] || "")} · ${esc(m.leagueName || "")} · your team: ${esc(m.teamName || "")}<br>
       ${m.status === "reconnect" ? `<span class="warn">${esc(m.lastError || "Needs reconnecting.")}</span>` : m.status === "error" ? `<span class="warn">Last sync failed: ${esc(m.lastError || "")}</span>` : `Last synced ${m.syncedAt ? esc(ago(m.syncedAt)) : "never"}.`}</div>
     <div class="actions"><button class="btn ghost small" data-act="syncNow">Sync now</button>
-      ${m.isLinker && m.platform === "espn" ? `<button class="btn ghost small" data-act="reconnectEspn" data-ext="${esc(m.externalId)}">Update ESPN cookies</button>` : ""}</div>
-    ${m.isLinker ? `<h2>Invite your league</h2><p class="sub">Anyone in ${esc(m.leagueName)} can open this link, sign in, and claim their team. No ESPN cookies needed on their end.</p>
+      ${m.isLinker && m.platform === "espn" ? `<button class="btn ghost small" data-act="reconnectEspn" data-ext="${esc(m.externalId)}">Update ESPN cookies</button>` : ""}
+      ${m.isLinker && m.platform === "yahoo" ? `<button class="btn ghost small" data-act="yahooSignIn">Reconnect Yahoo</button>` : ""}</div>
+    ${m.isLinker ? `<h2>Invite your league</h2><p class="sub">Anyone in ${esc(m.leagueName)} can open this link, sign in, and claim their team. ${m.platform === "sleeper" ? "" : `No ${esc(PLATFORM[m.platform])} login needed on their end.`}</p>
       <div class="actions"><button class="btn small" data-act="shareInvite" data-code="${esc(m.inviteCode)}">Share invite link</button><button class="btn ghost small" data-act="copyInvite" data-code="${esc(m.inviteCode)}">Copy</button></div>
       <div class="panel">${(m.claims || []).map((c) => `<div class="row"><span class="who"><span class="name">${esc(c.name)}</span><br><span class="meta">${esc(c.manager || "")}</span></span>${c.mine ? `<span class="tag">You</span>` : c.claimed ? `<button class="btn ghost small" data-act="release" data-lt="${esc(c.id)}">Release</button>` : `<span class="tag">Open</span>`}</div>`).join("")}</div>` : ""}
     <div class="actions"><button class="btn ghost small" data-act="unlinkTeam">Stop syncing (keep as manual team)</button><button class="btn danger small" data-act="deleteTeam">Delete team</button></div>
@@ -507,6 +517,41 @@ function sleeperDlg() {
     <label class="f" for="su">Sleeper username</label><input type="text" id="su" autocomplete="off" autocapitalize="off">
     <div class="actions"><button class="btn" data-act="sleeperFind">Find my leagues</button></div><div id="sleeperOut"></div><div id="dlgErr" class="err"></div>`);
   setTimeout(() => $("su")?.focus(), 50);
+}
+function yahooDlg(msg) {
+  S.yahooWaiting = false;
+  openDlg(`<h3>Link a Yahoo league</h3><p class="sub">Loading…</p>`);
+  api("yahooLeagues").then((r) => {
+    if (!r.connected) {
+      openDlg(`<h3>Link a Yahoo league</h3>
+        <p class="sub">Sign in on Yahoo's page and tap <b>Agree</b> to let this app read your fantasy rosters. It can't change anything, and your Yahoo password never reaches this app.</p>
+        ${msg || r.note ? `<p class="warnbox">${esc(msg || r.note)}</p>` : ""}
+        <div class="actions"><button class="btn" data-act="yahooSignIn">Sign in with Yahoo</button></div>
+        <p class="sub">On iPhone, Yahoo may open over the app. When it says you're done, close it and you'll land back here.</p>
+        <div id="dlgErr" class="err"></div>`);
+      return;
+    }
+    openDlg(`<h3>Link a Yahoo league</h3>
+      ${msg ? `<p class="warnbox">${esc(msg)}</p>` : ""}
+      ${r.leagues.length ? `<h2>Your ${esc(r.season)} leagues</h2><div class="panel">${r.leagues.map((l) => `<div class="row"><span class="who"><span class="name">${esc(l.name)}</span><br><span class="meta">${esc(l.teams)} teams${r.alreadyLinked.includes(l.id) ? " · already linked by someone" : ""}</span></span><button class="btn small" data-act="yahooLink" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Link</button></div>`).join("")}</div>`
+        : `<p class="sub">No ${esc(r.season)} Yahoo football leagues on this Yahoo account.</p>`}
+      <div class="actions"><button class="btn ghost small" data-act="yahooSignIn">Use a different Yahoo account</button></div>
+      <div id="dlgErr" class="err"></div>`);
+  }).catch((e) => openDlg(`<h3>Link a Yahoo league</h3><p class="err">${esc(e.message)}</p>`));
+}
+function yahooReturn() {
+  const p = S.pendingYahoo; S.pendingYahoo = null;
+  if (!p) return;
+  if (p.err) { yahooDlg(p.err); return; }
+  // a synced Yahoo team that needed reconnecting resumes on the next sync; otherwise pick a league
+  S.leagueMeta = {};
+  yahooDlg();
+}
+async function yahooSignIn(a) {
+  a.disabled = true; a.textContent = "Opening Yahoo…";
+  const r = await api("yahooStart", { returnTo: location.origin + location.pathname });
+  S.yahooWaiting = true;
+  location.href = r.url;
 }
 async function afterLink(r, label) {
   await refresh(true);
@@ -746,6 +791,15 @@ document.addEventListener("click", async (e) => {
       case "benchOn": { t.bench_snooze_until = null; render(); bg(sb.from("user_teams").update({ bench_snooze_until: null }).eq("id", t.id)); return; }
       case "linkEspn": return espnDlg();
       case "linkSleeper": return sleeperDlg();
+      case "linkYahoo": return yahooDlg();
+      case "yahooSignIn": return yahooSignIn(a);
+      case "yahooLink": {
+        a.disabled = true; a.textContent = "Linking…";
+        try {
+          const r = await api("linkLeague", { platform: "yahoo", league: a.dataset.id });
+          S.leagueMeta = {}; return afterLink(r, a.dataset.name);
+        } finally { if (document.contains(a)) { a.disabled = false; a.textContent = "Link"; } }
+      }
       case "joinManual": return joinManualDlg();
       case "joinGo": {
         const v = $("inv").value.trim(), code = (v.match(/join=([A-Za-z0-9]+)/) || [])[1] || (/^[A-Za-z0-9]{6,20}$/.test(v) ? v : "");

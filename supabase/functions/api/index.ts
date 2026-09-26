@@ -4,9 +4,10 @@
 //   pregameNow  send yourself a pre-game check right now
 //   testPush    send a plain test notification
 //   sleeperLeagues / linkLeague / leagueForInvite / claimTeam / leagueInfo /
-//   syncLeagueNow / releaseClaim / unlinkTeam   league sync (Sleeper + ESPN)
+//   syncLeagueNow / releaseClaim / unlinkTeam   league sync (Sleeper + ESPN + Yahoo)
+//   yahooStart / yahooLeagues                    Yahoo sign-in and league list
 import { addPlayersToTeam, adminClient, cors, deliver, json, loadUser, pregameLines, sendPush, statusAlerts, type Admin } from "../_shared/core.ts";
-import { claimTeam, leagueForInvite, leagueInfo, linkLeague, sleeperUserLeagues, syncLeague } from "../_shared/leagues.ts";
+import { claimTeam, leagueForInvite, leagueInfo, linkLeague, ReconnectError, sleeperUserLeagues, syncLeague, yahooAuthUrl, yahooConnected, yahooUserLeagues } from "../_shared/leagues.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -53,6 +54,20 @@ Deno.serve(async (req) => {
         const r = await sleeperUserLeagues(name);
         const { data: linked } = await admin.from("leagues").select("external_id").eq("platform", "sleeper").eq("season", r.season).in("external_id", r.leagues.map((l: any) => l.id));
         return json({ ...r, alreadyLinked: (linked ?? []).map((x) => x.external_id) });
+      }
+      case "yahooStart": return json({ url: await yahooAuthUrl(user.id, String(body.returnTo ?? "")) });
+      case "yahooLeagues": {
+        if (!(await yahooConnected(admin, user.id))) return json({ connected: false });
+        try {
+          const r = await yahooUserLeagues(admin, user.id);
+          const { data: linked } = r.leagues.length
+            ? await admin.from("leagues").select("external_id").eq("platform", "yahoo").eq("season", r.season).in("external_id", r.leagues.map((l) => l.id))
+            : { data: [] };
+          return json({ connected: true, ...r, alreadyLinked: (linked ?? []).map((x: any) => x.external_id) });
+        } catch (e) {
+          if (e instanceof ReconnectError) return json({ connected: false, note: e.message });
+          throw e;
+        }
       }
       case "linkLeague": return json(await linkLeague(admin, user.id, body));
       case "leagueForInvite": return json(await leagueForInvite(admin, user.id, String(body.code ?? "")));

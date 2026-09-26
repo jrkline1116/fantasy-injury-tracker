@@ -1,4 +1,4 @@
-// League sync: Sleeper + ESPN. One person links a league, every team is pulled in,
+// League sync: Sleeper + ESPN + Yahoo. One person links a league, every team is pulled in,
 // league-mates claim their team through an invite link, claimed teams stay in sync.
 import { addPlayersToTeam, deliver, inChunks, normName, normTeam, type Admin } from "./core.ts";
 
@@ -161,6 +161,180 @@ export async function fetchEspn(leagueId: string, season: number, creds: EspnCre
   return { name: d.settings?.name ?? `ESPN league ${leagueId}`, teams };
 }
 
+/* ---------- Yahoo ---------- */
+// Yahoo uses OAuth: the person signs in on Yahoo's own page and Yahoo sends them to the
+// `yahoo` edge function, which stores their tokens (encrypted) in platform_auth. A Yahoo
+// league syncs with the tokens of whoever linked it. Yahoo rosters are readable by any
+// member of the league, so one connection covers every team.
+const Y_AUTH = "https://api.login.yahoo.com/oauth2";
+const Y_API = "https://fantasysports.yahooapis.com/fantasy/v2";
+type YahooCreds = { access_token: string; refresh_token: string; expires_at: number; guid?: string };
+
+// Where people may be sent back to after signing in with Yahoo (prefix match).
+export const APP_URLS = [
+  "https://jrkline1116.github.io/fantasy-injury-tracker/",
+  "https://fantasyinjuryassist.com/",
+  "https://www.fantasyinjuryassist.com/",
+  "http://localhost",
+  "http://127.0.0.1",
+];
+function yahooClient() {
+  const id = Deno.env.get("YAHOO_CLIENT_ID"), secret = Deno.env.get("YAHOO_CLIENT_SECRET");
+  if (!id || !secret) throw new Error("Yahoo linking isn't set up yet (missing YAHOO_CLIENT_ID / YAHOO_CLIENT_SECRET).");
+  const redirect = Deno.env.get("YAHOO_REDIRECT_URI") || `${Deno.env.get("SUPABASE_URL")}/functions/v1/yahoo`;
+  return { id, secret, redirect };
+}
+const b64u = (u: Uint8Array) => b64(u).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const unb64u = (s: string) => unb64(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4));
+async function stateKey(): Promise<CryptoKey> {
+  const raw = Deno.env.get("LEAGUE_SECRET_KEY");
+  if (!raw) throw new Error("League linking isn't set up yet (missing LEAGUE_SECRET_KEY).");
+  return crypto.subtle.importKey("raw", new TextEncoder().encode("yahoo-state:" + raw), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+}
+/** The Yahoo sign-in page URL. `state` is signed so the callback knows which user it's for. */
+export async function yahooAuthUrl(userId: string, returnTo: string) {
+  const c = yahooClient();
+  const back = String(returnTo ?? "");
+  if (!APP_URLS.some((u) => back.startsWith(u))) throw new Error("Open the app from its normal address and try again.");
+  const payload = b64u(new TextEncoder().encode(JSON.stringify({ u: userId, r: back, t: Date.now() })));
+  const sig = b64u(new Uint8Array(await crypto.subtle.sign("HMAC", await stateKey(), new TextEncoder().encode(payload))));
+  const q = new URLSearchParams({ client_id: c.id, redirect_uri: c.redirect, response_type: "code", state: `${payload}.${sig}` });
+  return `${Y_AUTH}/request_auth?${q}`;
+}
+export async function readYahooState(state: string): Promise<{ u: string; r: string; t: number }> {
+  const [payload, sig] = String(state ?? "").split(".");
+  if (!payload || !sig) throw new Error("That Yahoo sign-in link is incomplete. Start again from the app.");
+  const ok = await crypto.subtle.verify("HMAC", await stateKey(), unb64u(sig), new TextEncoder().encode(payload));
+  if (!ok) throw new Error("That Yahoo sign-in link isn't valid. Start again from the app.");
+  const s = JSON.parse(new TextDecoder().decode(unb64u(payload)));
+  if (!APP_URLS.some((u) => String(s.r).startsWith(u))) throw new Error("Unknown return address.");
+  return s;
+}
+async function yahooToken(params: Record<string, string>) {
+  const c = yahooClient();
+  const res = await fetch(`${Y_AUTH}/get_token`, {
+    method: "POST",
+    headers: { Authorization: "Basic " + btoa(`${c.id}:${c.secret}`), "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ redirect_uri: c.redirect, ...params }),
+  });
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok || !d.access_token) {
+    if (params.grant_type === "refresh_token" && res.status >= 400 && res.status < 500) throw new ReconnectError("Yahoo sign-in expired. Reconnect Yahoo.");
+    throw new Error(`Yahoo sign-in failed (${d.error_description || d.error || res.status}).`);
+  }
+  return d;
+}
+async function saveYahoo(admin: Admin, userId: string, creds: YahooCreds) {
+  const { error } = await admin.from("platform_auth").upsert({ user_id: userId, platform: "yahoo", ciphertext: await encryptJson(creds), updated_at: new Date().toISOString() }, { onConflict: "user_id,platform" });
+  if (error) throw error;
+}
+/** Called by the `yahoo` function after the person approves access on Yahoo. */
+export async function yahooConnect(admin: Admin, userId: string, code: string) {
+  const d = await yahooToken({ grant_type: "authorization_code", code });
+  await saveYahoo(admin, userId, { access_token: d.access_token, refresh_token: d.refresh_token, expires_at: Date.now() + Number(d.expires_in ?? 3600) * 1000, guid: d.xoauth_yahoo_guid });
+  // leagues this person linked were paused waiting for them: resume
+  await admin.from("leagues").update({ status: "ok", last_error: null }).eq("platform", "yahoo").eq("linked_by", userId).eq("status", "reconnect");
+}
+async function yahooCreds(admin: Admin, userId: string): Promise<YahooCreds> {
+  const { data } = await admin.from("platform_auth").select("ciphertext").eq("user_id", userId).eq("platform", "yahoo").maybeSingle();
+  if (!data?.ciphertext) throw new ReconnectError("Yahoo isn't connected. Reconnect Yahoo.");
+  let c = await decryptJson<YahooCreds>(data.ciphertext);
+  if (c.expires_at - Date.now() < 120_000) {
+    const d = await yahooToken({ grant_type: "refresh_token", refresh_token: c.refresh_token });
+    c = { ...c, access_token: d.access_token, refresh_token: d.refresh_token || c.refresh_token, expires_at: Date.now() + Number(d.expires_in ?? 3600) * 1000, guid: d.xoauth_yahoo_guid || c.guid };
+    await saveYahoo(admin, userId, c);
+  }
+  return c;
+}
+export async function yahooConnected(admin: Admin, userId: string) {
+  const { data } = await admin.from("platform_auth").select("user_id").eq("user_id", userId).eq("platform", "yahoo").maybeSingle();
+  return !!data;
+}
+async function yahooGet(creds: YahooCreds, path: string) {
+  const res = await fetch(`${Y_API}${path}${path.includes("?") ? "&" : "?"}format=json`, { headers: { Authorization: `Bearer ${creds.access_token}`, accept: "application/json" } });
+  if (res.status === 401) throw new ReconnectError("Yahoo sign-in expired. Reconnect Yahoo.");
+  if (!res.ok) throw new Error(`Yahoo returned ${res.status} for ${path}`);
+  return (await res.json())?.fantasy_content;
+}
+// Yahoo's JSON: collections look like {"0": {team: ...}, "1": {...}, count: 2}, and records are
+// arrays of one-key objects ([{team_key}, {name}, ...]) that we merge into one object.
+function yItems(coll: any, key: string): any[] {
+  if (!coll || typeof coll !== "object") return [];
+  return Object.keys(coll).filter((k) => /^\d+$/.test(k)).sort((a, b) => +a - +b).map((k) => coll[k]?.[key]).filter(Boolean);
+}
+function yMerge(x: any): Record<string, any> {
+  const o: Record<string, any> = {};
+  const walk = (v: any) => { if (Array.isArray(v)) v.forEach(walk); else if (v && typeof v === "object") Object.assign(o, v); };
+  walk(x);
+  return o;
+}
+const yPart = (rec: any[], key: string) => (Array.isArray(rec) ? rec.slice(1).find((p) => p && typeof p === "object" && key in p)?.[key] : undefined);
+
+export async function yahooUserLeagues(admin: Admin, userId: string) {
+  const creds = await yahooCreds(admin, userId);
+  const fc = await yahooGet(creds, "/users;use_login=1/games;game_keys=nfl/leagues");
+  const user = yItems(fc?.users, "user")[0];
+  const leagues: { id: string; name: string; teams: number }[] = [];
+  let season = currentSeason();
+  for (const g of yItems(yPart(user, "games"), "game")) {
+    const gm = yMerge(Array.isArray(g) ? g[0] : g);
+    if (gm.season) season = Number(gm.season);
+    for (const l of yItems(yPart(g, "leagues"), "league")) {
+      const lm = yMerge(l);
+      if (lm.league_key) leagues.push({ id: String(lm.league_key), name: String(lm.name ?? "Yahoo league"), teams: Number(lm.num_teams ?? 0) });
+    }
+  }
+  return { season, leagues };
+}
+const YAHOO_SLOT: Record<string, string> = {
+  QB: "QB", RB: "RB", WR: "WR", TE: "TE", K: "K", DEF: "DST",
+  "W/R/T": "FLEX", "W/R": "FLEX", "W/T": "FLEX", "R/T": "FLEX", "Q/W/R/T": "SFLEX",
+  D: "IDP", DB: "IDP", DL: "IDP", LB: "IDP", DE: "IDP", DT: "IDP", CB: "IDP", S: "IDP",
+  BN: "BN", IR: "IR", "IR+": "IR", NA: "IR",
+};
+function yahooTeam(t: any, fallbackMeta?: Record<string, any>): FetchedTeam {
+  const tm = { ...(fallbackMeta ?? {}), ...yMerge(Array.isArray(t) ? t[0] : t) };
+  const mgrs: any[] = Array.isArray(tm.managers) ? tm.managers.map((m: any) => m?.manager).filter(Boolean) : yItems(tm.managers, "manager");
+  const roster = yPart(t, "roster");
+  const players = yItems(roster?.["0"]?.players ?? roster?.players, "player");
+  const entries: Entry[] = players.map((p: any) => {
+    const pm = yMerge(p[0]);
+    const pos = String(yMerge(yPart(p, "selected_position")).position ?? "BN");
+    const team = normTeam(pm.editorial_team_abbr ?? null);
+    const isDst = pm.display_position === "DEF" || pm.position_type === "DT";
+    return { extId: isDst ? `DST:${team ?? ""}` : String(pm.player_id), name: pm.name?.full ?? "", team, pos: isDst ? "DEF" : (pm.display_position ?? null), slot: YAHOO_SLOT[pos] ?? "BN" };
+  });
+  return {
+    externalTeamId: String(tm.team_key),
+    name: String(tm.name ?? `Team ${tm.team_id ?? ""}`),
+    manager: mgrs[0]?.nickname ?? null,
+    ownerKeys: mgrs.map((m) => String(m.guid ?? "").toUpperCase()).filter(Boolean),
+    entries,
+  };
+}
+export async function fetchYahoo(admin: Admin, leagueKey: string, linkerId: string): Promise<FetchedLeague> {
+  const creds = await yahooCreds(admin, linkerId);
+  try {
+    const fc = await yahooGet(creds, `/league/${leagueKey}/teams/roster`);
+    const lg = fc?.league;
+    const teams = yItems(yPart(lg, "teams"), "team");
+    if (teams.length) return { name: String(yMerge(lg[0]).name ?? "Yahoo league"), teams: teams.map((t) => yahooTeam(t)) };
+  } catch (e) {
+    if (e instanceof ReconnectError) throw e;
+  }
+  // fallback: list the teams, then read each roster
+  const fc = await yahooGet(creds, `/league/${leagueKey}/teams`);
+  const lg = fc?.league;
+  if (!lg) throw new Error("Yahoo league not found.");
+  const metas = yItems(yPart(lg, "teams"), "team").map((t) => yMerge(Array.isArray(t) ? t[0] : t));
+  const teams: FetchedTeam[] = [];
+  for (const m of metas) {
+    const r = await yahooGet(creds, `/team/${m.team_key}/roster`);
+    teams.push(yahooTeam(r?.team, m));
+  }
+  return { name: String(yMerge(lg[0]).name ?? "Yahoo league"), teams };
+}
+
 /* ---------- matching platform players to our player list ---------- */
 async function matchEntries(admin: Admin, platform: string, teams: FetchedTeam[]) {
   const all = teams.flatMap((t) => t.entries);
@@ -170,11 +344,13 @@ async function matchEntries(admin: Admin, platform: string, teams: FetchedTeam[]
     const found = await inChunks<{ id: string }>(ids, (c) => admin.from("nfl_players").select("id").in("id", c));
     found.forEach((f) => byExt.set(f.id, f.id));
   } else {
-    const espnIds = [...new Set(all.filter((e) => !e.extId.startsWith("DST:")).map((e) => e.extId))];
-    const found = await inChunks<{ id: string; espn_id: string }>(espnIds, (c) => admin.from("nfl_players").select("id,espn_id").in("espn_id", c));
-    found.forEach((f) => byExt.set(f.espn_id, f.id));
+    if (platform === "espn") {
+      const espnIds = [...new Set(all.filter((e) => !e.extId.startsWith("DST:")).map((e) => e.extId))];
+      const found = await inChunks<{ id: string; espn_id: string }>(espnIds, (c) => admin.from("nfl_players").select("id,espn_id").in("espn_id", c));
+      found.forEach((f) => byExt.set(f.espn_id, f.id));
+    }
     for (const e of all) if (e.extId.startsWith("DST:") && e.team) byExt.set(e.extId, e.team); // our defense ids are team abbreviations
-    // name fallback for anyone ESPN-id matching missed
+    // match by name + NFL team (Yahoo, and anyone ESPN-id matching missed)
     const missing = all.filter((e) => !byExt.has(e.extId) && e.name);
     const names = [...new Set(missing.map((e) => normName(e.name)))];
     if (names.length) {
@@ -187,7 +363,7 @@ async function matchEntries(admin: Admin, platform: string, teams: FetchedTeam[]
       }
     }
   }
-  if (platform === "espn") {
+  if (platform !== "sleeper") {
     const dstIds = [...new Set(all.filter((e) => e.extId.startsWith("DST:")).map((e) => byExt.get(e.extId)).filter(Boolean) as string[])];
     const ok = new Set((await inChunks<{ id: string }>(dstIds, (c) => admin.from("nfl_players").select("id").in("id", c))).map((x) => x.id));
     for (const e of all) if (e.extId.startsWith("DST:") && !ok.has(byExt.get(e.extId) ?? "")) byExt.delete(e.extId);
@@ -209,6 +385,7 @@ async function matchEntries(admin: Admin, platform: string, teams: FetchedTeam[]
 }
 
 /* ---------- sync one league ---------- */
+const PNAME: Record<string, string> = { espn: "ESPN", sleeper: "Sleeper", yahoo: "Yahoo" };
 export async function syncLeague(admin: Admin, league: any, opts: { quiet?: boolean } = {}) {
   let creds: EspnCreds = {};
   if (league.platform === "espn") {
@@ -217,14 +394,16 @@ export async function syncLeague(admin: Admin, league: any, opts: { quiet?: bool
   }
   let fetched: FetchedLeague;
   try {
-    fetched = league.platform === "sleeper" ? await fetchSleeper(league.external_id) : await fetchEspn(league.external_id, league.season, creds);
+    fetched = league.platform === "sleeper" ? await fetchSleeper(league.external_id)
+      : league.platform === "yahoo" ? await fetchYahoo(admin, league.external_id, league.linked_by)
+      : await fetchEspn(league.external_id, league.season, creds);
   } catch (e) {
     const reconnect = e instanceof ReconnectError;
     await admin.from("leagues").update({ status: reconnect ? "reconnect" : "error", last_error: (e as Error).message }).eq("id", league.id);
     if (reconnect && !opts.quiet) {
       await deliver(admin, [{
         user_id: league.linked_by, kind: "roster", title: `Reconnect ${league.name}`,
-        lines: [{ team: league.name, text: "ESPN stopped accepting the saved login, so syncing is paused for everyone in this league. Open the team's settings and reconnect ESPN." }],
+        lines: [{ team: league.name, text: `${PNAME[league.platform] ?? "The league site"} stopped accepting the saved login, so syncing is paused for everyone in this league. Open the team's settings and reconnect ${PNAME[league.platform] ?? ""}.` }],
         dedupe_key: `reconnect:${league.id}:${new Date().toISOString().slice(0, 10)}`, held_until: null, push: true,
       }]);
     }
@@ -276,9 +455,13 @@ export async function applyRoster(admin: Admin, ut: { id: string; user_id: strin
 /* ---------- linking and claiming ---------- */
 export async function linkLeague(admin: Admin, userId: string, input: { platform: string; league: string; espn_s2?: string; swid?: string; sleeperUserId?: string }) {
   const platform = input.platform;
-  if (!["sleeper", "espn"].includes(platform)) throw new Error("That platform isn't supported yet.");
+  if (!["sleeper", "espn", "yahoo"].includes(platform)) throw new Error("That platform isn't supported yet.");
   const externalId = platform === "espn" ? parseEspnLeagueId(input.league) : String(input.league ?? "").trim();
-  if (!externalId || !/^\d+$/.test(externalId)) throw new Error(platform === "espn" ? "Paste the ESPN league URL (it contains leagueId=...)." : "Pick a Sleeper league.");
+  if (platform === "yahoo") {
+    if (!/^\d+\.l\.\d+$/.test(externalId ?? "")) throw new Error("Pick a Yahoo league.");
+  } else if (!externalId || !/^\d+$/.test(externalId)) throw new Error(platform === "espn" ? "Paste the ESPN league URL (it contains leagueId=...)." : "Pick a Sleeper league.");
+  if (!externalId) throw new Error("Pick a league.");
+  const yahoo = platform === "yahoo" ? await yahooCreds(admin, userId) : null;
   const season = currentSeason();
   const creds: EspnCreds = { espn_s2: input.espn_s2?.trim() || undefined, swid: normSwid(input.swid) };
   if (platform === "espn" && !!creds.espn_s2 !== !!creds.swid) throw new Error("Add both cookies (espn_s2 and SWID), or leave both blank for a public league.");
@@ -286,7 +469,7 @@ export async function linkLeague(admin: Admin, userId: string, input: { platform
   let { data: league } = await admin.from("leagues").select("*").eq("platform", platform).eq("external_id", externalId).eq("season", season).maybeSingle();
   const isNew = !league;
   if (!league) {
-    const { data, error } = await admin.from("leagues").insert({ platform, external_id: externalId, season, name: `${platform === "espn" ? "ESPN" : "Sleeper"} league`, linked_by: userId }).select().single();
+    const { data, error } = await admin.from("leagues").insert({ platform, external_id: externalId, season, name: `${PNAME[platform]} league`, linked_by: userId }).select().single();
     if (error) throw error;
     league = data;
   }
@@ -296,6 +479,11 @@ export async function linkLeague(admin: Admin, userId: string, input: { platform
     if (league.linked_by !== userId) await admin.from("leagues").update({ linked_by: userId }).eq("id", league.id);
     league.linked_by = userId;
   }
+  // Yahoo: the person linking now is the connection (their Yahoo sign-in is known to work)
+  if (platform === "yahoo" && (league.linked_by !== userId || league.status !== "ok")) {
+    await admin.from("leagues").update({ linked_by: userId, status: "ok", last_error: null }).eq("id", league.id);
+    league.linked_by = userId; league.status = "ok";
+  }
   try {
     await syncLeague(admin, league, { quiet: true });
   } catch (e) {
@@ -303,7 +491,7 @@ export async function linkLeague(admin: Admin, userId: string, input: { platform
     throw e;
   }
   // find the linker's own team
-  const ownerKey = platform === "espn" ? creds.swid : input.sleeperUserId;
+  const ownerKey = platform === "espn" ? creds.swid : platform === "yahoo" ? yahoo?.guid : input.sleeperUserId;
   const { data: teams } = await admin.from("league_teams").select("id,owner_keys").eq("league_id", league.id);
   const mine = ownerKey ? (teams ?? []).find((t) => (t.owner_keys ?? []).map((k: string) => k.toUpperCase()).includes(ownerKey.toUpperCase())) : undefined;
   let teamId: string | null = null;
