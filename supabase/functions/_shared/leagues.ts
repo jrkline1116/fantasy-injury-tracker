@@ -254,7 +254,15 @@ export async function yahooConnected(admin: Admin, userId: string) {
 async function yahooGet(creds: YahooCreds, path: string) {
   const res = await fetch(`${Y_API}${path}${path.includes("?") ? "&" : "?"}format=json`, { headers: { Authorization: `Bearer ${creds.access_token}`, accept: "application/json" } });
   if (res.status === 401) throw new ReconnectError("Yahoo sign-in expired. Reconnect Yahoo.");
-  if (!res.ok) throw new Error(`Yahoo returned ${res.status} for ${path}`);
+  if (!res.ok) {
+    // pass along Yahoo's own explanation (JSON or XML error body) so problems are diagnosable
+    const body = await res.text().catch(() => "");
+    let why = "";
+    try { const j = JSON.parse(body); why = j?.error?.description ?? j?.error?.message ?? ""; } catch { /* not JSON */ }
+    if (!why) why = (body.match(/<description>([\s\S]*?)<\/description>/i)?.[1] ?? body.match(/oauth_problem="?([a-z_]+)/i)?.[1] ?? "").trim();
+    console.error("Yahoo error", res.status, path, body.slice(0, 500));
+    throw new Error(`Yahoo returned ${res.status}${why ? `: ${why.slice(0, 200)}` : ""}`);
+  }
   return (await res.json())?.fantasy_content;
 }
 // Yahoo's JSON: collections look like {"0": {team: ...}, "1": {...}, count: 2}, and records are
