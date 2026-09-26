@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.5.3"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.5.4"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -602,12 +602,36 @@ function iosNextStepsDlg(title) {
     </ol>
     <div class="actions"><button class="btn" data-act="closeDlg">Got it</button></div>`);
 }
+// Android in a browser (not the Play app): alerts already work here, but point people to the Play test.
+const ANDROID_GROUP_URL = "https://groups.google.com/g/fantasy-injury-assist-trackers";
+const ANDROID_OPTIN_URL = "https://play.google.com/apps/testing/com.fantasyinjuryassist.app";
+const ANDROID_STORE_URL = "https://play.google.com/store/apps/details?id=com.fantasyinjuryassist.app";
+try { if (document.referrer.startsWith("android-app://")) sessionStorage.setItem("fit-play", "1"); } catch { /* ignore */ }
+const androidBrowser = () => {
+  if (!/Android/i.test(navigator.userAgent)) return false;
+  let fromPlay = false;
+  try { fromPlay = sessionStorage.getItem("fit-play") === "1"; } catch { /* ignore */ }
+  return !fromPlay && !matchMedia("(display-mode: standalone)").matches && !matchMedia("(display-mode: fullscreen)").matches;
+};
+function androidNextStepsDlg(title) {
+  openDlg(`<h3>${esc(title)}</h3>
+    <p class="sub">You're all set. Turn on notifications in <b>Settings</b> and alerts will come to this phone.</p>
+    <div class="tipbox"><b>Want the Android app?</b> It's in testing on Google Play, and joining helps get it into the store:</div>
+    <ol style="padding-left:20px;margin:10px 0;line-height:1.5">
+      <li><a href="${ANDROID_GROUP_URL}" target="_blank" rel="noopener">Join the tester group</a> (one tap, with the Google account on this phone).</li>
+      <li><a href="${ANDROID_OPTIN_URL}" target="_blank" rel="noopener">Opt in to testing</a> and tap <b>Become a tester</b>.</li>
+      <li><a href="${ANDROID_STORE_URL}" target="_blank" rel="noopener">Install Fantasy Injury Assist</a> and sign in with the same email. Your team will be there.</li>
+    </ol>
+    <p class="sub">Please keep the app for at least 2 weeks. Google requires that before it can go public.</p>
+    <div class="actions"><a class="btn" style="text-decoration:none;display:inline-block" href="${ANDROID_GROUP_URL}" target="_blank" rel="noopener">Get the Android app</a><button class="btn ghost" data-act="closeDlg">Stay on the website</button></div>`);
+}
 async function afterLink(r, label) {
   await refresh(true);
   if (r.teamId) {
     S.activeTeam = r.teamId; localStorage.setItem("fit-team", r.teamId);
     closeDlg(); location.hash = "teams"; render();
     if (iosBrowser()) return iosNextStepsDlg(`${label === "Team" ? "Team claimed" : `${label} linked`}`);
+    if (androidBrowser()) return androidNextStepsDlg(`${label === "Team" ? "Team claimed" : `${label} linked`}`);
     toast(`${label} linked`, "Your roster is in, with QB and teammate links added. It stays in sync automatically.");
   } else {
     S.pendingJoin = r.inviteCode; joinDlg("We couldn't tell which team is yours. Pick it below.");
