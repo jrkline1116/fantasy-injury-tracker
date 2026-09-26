@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "com.fantasyinjuryassist.app",
+        "sha256_cert_fingerprints": ["3B:CC:95:3B:78:D4:71:6C:09:7F:C1:78:AD:94:4D:9B:3B:D0:CE:1F:F1:BC:46:ED:99:31:87:61:69:1A:05:78"]
+      }
+    }]

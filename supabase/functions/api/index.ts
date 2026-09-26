@@ -6,6 +6,7 @@
 //   sleeperLeagues / linkLeague / leagueForInvite / claimTeam / leagueInfo /
 //   syncLeagueNow / releaseClaim / unlinkTeam   league sync (Sleeper + ESPN + Yahoo)
 //   yahooStart / yahooLeagues                    Yahoo sign-in and league list
+//   deleteAccount                                 erase the account and everything tied to it
 import { addPlayersToTeam, adminClient, cors, deliver, json, loadUser, pregameLines, sendPush, statusAlerts, type Admin } from "../_shared/core.ts";
 import { claimTeam, leagueForInvite, leagueInfo, linkLeague, ReconnectError, sleeperUserLeagues, syncLeague, yahooAuthUrl, yahooConnected, yahooUserLeagues } from "../_shared/leagues.ts";
 
@@ -87,6 +88,23 @@ Deno.serve(async (req) => {
       }
       case "unlinkTeam": {
         await admin.from("user_teams").update({ league_team_id: null }).eq("id", String(body.teamId)).eq("user_id", user.id);
+        return json({ ok: true });
+      }
+      case "deleteAccount": {
+        // Leagues this person linked: hand them to another member who claimed a team, so the
+        // league keeps working for everyone else. Their own ESPN cookies / Yahoo login go with them.
+        const { data: mine } = await admin.from("leagues").select("id,platform").eq("linked_by", user.id);
+        for (const l of mine ?? []) {
+          const { data: lts } = await admin.from("league_teams").select("id").eq("league_id", l.id);
+          const { data: heir } = await admin.from("user_teams").select("user_id").in("league_team_id", (lts ?? []).map((x) => x.id)).neq("user_id", user.id).limit(1).maybeSingle();
+          if (!heir) continue; // nobody else uses it: deleted along with the account
+          await admin.from("league_secrets").delete().eq("league_id", l.id);
+          const update: Record<string, unknown> = { linked_by: heir.user_id };
+          if (l.platform === "yahoo") Object.assign(update, { status: "reconnect", last_error: "The person who linked this league deleted their account. Reconnect Yahoo to keep syncing." });
+          await admin.from("leagues").update(update).eq("id", l.id);
+        }
+        const { error } = await admin.auth.admin.deleteUser(user.id);
+        if (error) throw error;
         return json({ ok: true });
       }
       default: return json({ error: "Unknown action." }, 400);

@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.4.0"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.5.0"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -393,9 +393,11 @@ function viewSettings() {
   </div>
   <h2>Account</h2>
   <div class="panel"><div class="setting"><div class="top"><span>${esc(S.session?.user?.email || "")}</span><button class="btn ghost small" data-act="signOut">Sign out</button></div></div>
+    <div class="setting"><div class="top"><span class="t">Delete account</span><button class="btn danger small" data-act="deleteAccount">Delete</button></div>
+      <div class="hint">Permanently deletes your account, teams, settings, alert history, and any saved league logins.</div></div>
     ${PLANS_ENABLED ? `<div class="setting"><div class="top"><span class="t">Plan: ${S.plan === "pro" ? "Pro" : "Free"}</span>${S.plan === "pro" ? `<span class="tag">Unlimited teams</span>` : `<button class="btn ghost small" data-act="upgrade">About Pro</button>`}</div>
       <div class="hint">${S.plan === "pro" ? "Thanks for supporting the app." : `Free includes ${FREE_TEAMS} team with every alert type.`}</div></div>` : ""}</div>
-  <p class="sub" style="margin-top:16px">Version ${APP_VERSION}. ${CFG.BMC_URL ? `Enjoying it? <a href="${esc(CFG.BMC_URL)}" target="_blank" rel="noopener">Buy me a coffee</a>.` : ""}</p>`;
+  <p class="sub" style="margin-top:16px">Version ${APP_VERSION}. <a href="privacy.html" target="_blank" rel="noopener">Privacy policy</a>. ${CFG.BMC_URL ? `Enjoying it? <a href="${esc(CFG.BMC_URL)}" target="_blank" rel="noopener">Buy me a coffee</a>.` : ""}</p>`;
 }
 
 /* ---------------- dialogs ---------------- */
@@ -937,6 +939,15 @@ document.addEventListener("click", async (e) => {
         if (!confirm("Clear your alert history?")) return;
         await sb.from("alerts").delete().eq("user_id", S.session.user.id); await refresh(); return;
       case "signOut": await sb.auth.signOut(); return;
+      case "deleteAccount": {
+        if (!confirm("Delete your account? Your teams, settings, and alert history are erased for good. This can't be undone.")) return;
+        if (prompt('Type DELETE to confirm.') !== "DELETE") return toast("Not deleted", "Your account is unchanged.");
+        a.disabled = true;
+        await api("deleteAccount");
+        localStorage.removeItem("fit-team");
+        await sb.auth.signOut();
+        return toast("Account deleted", "Everything tied to your account has been removed.");
+      }
     }
   } catch (err) { if (a) a.disabled = false; dlg.open && $("dlgErr") ? setErr(err.message) : showError(err); }
   finally { clearTimeout(busyTimer); a.classList.remove("busy"); }

@@ -10,3 +10,9 @@ supabase/.branches/
 *secret*
 *password*
 *PASSWORD*
+
+# Android signing key (keep outside the repo, back it up)
+*.keystore
+*.jks
+*.aab
+*.apk
