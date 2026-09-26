@@ -285,6 +285,34 @@ function yMerge(x: any): Record<string, any> {
 }
 const yPart = (rec: any[], key: string) => (Array.isArray(rec) ? rec.slice(1).find((p) => p && typeof p === "object" && key in p)?.[key] : undefined);
 
+/** Diagnostic: which Yahoo Fantasy calls this person's token can make. Returns statuses only, no tokens. */
+export async function yahooDiagnose(admin: Admin, userId: string) {
+  const out: Record<string, unknown> = {};
+  const id = Deno.env.get("YAHOO_CLIENT_ID") ?? "";
+  out.clientIdStart = id.slice(0, 12);
+  out.clientIdEnd = id.slice(-6);
+  out.redirect = yahooClient().redirect;
+  let creds: YahooCreds;
+  try { creds = await yahooCreds(admin, userId); } catch (e) { out.creds = (e as Error).message; return out; }
+  out.hasGuid = !!creds.guid;
+  out.tokenMinutesLeft = Math.round((creds.expires_at - Date.now()) / 60000);
+  const paths = ["/game/nfl", "/users;use_login=1", "/users;use_login=1/games", "/users;use_login=1/games;game_keys=nfl/leagues", "/users;use_login=1/games;game_codes=nfl/teams"];
+  const results: Record<string, string> = {};
+  for (const p of paths) {
+    const res = await fetch(`${Y_API}${p}?format=json`, { headers: { Authorization: `Bearer ${creds.access_token}`, accept: "application/json" } });
+    const body = await res.text().catch(() => "");
+    let why = "";
+    try { const j = JSON.parse(body); why = j?.error?.description ?? ""; } catch { /* ignore */ }
+    results[p] = `${res.status}${why ? ` ${why}` : ""}`;
+  }
+  out.results = results;
+  // also ask Yahoo what the token itself is allowed to do
+  try {
+    const r = await fetch("https://api.login.yahoo.com/openid/v1/userinfo", { headers: { Authorization: `Bearer ${creds.access_token}` } });
+    out.userinfo = r.status;
+  } catch { /* ignore */ }
+  return out;
+}
 export async function yahooUserLeagues(admin: Admin, userId: string) {
   const creds = await yahooCreds(admin, userId);
   const fc = await yahooGet(creds, "/users;use_login=1/games;game_keys=nfl/leagues");
