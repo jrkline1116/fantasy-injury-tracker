@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.5.0"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.5.1"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -68,7 +68,26 @@ function renderSignIn(msg) {
     <h2>Sign in</h2><p class="sub">We'll email you a sign-in code. No password needed.</p>
     <label class="f" for="em">Email</label><input type="email" id="em" autocomplete="email" placeholder="you@example.com" value="${esc(localStorage.getItem("fit-email") || "")}">
     <div class="actions"><button class="btn" data-act="sendLink">Email me a code</button></div>
+    <div id="authMsg" class="${msg ? "err" : "hint"}">${esc(msg || "")}</div></div>
+    <p class="sub" style="text-align:center;margin-top:14px"><button class="linkbtn" data-act="pwMode">Test account sign-in</button></p>`;
+}
+// Password sign-in, only for accounts created with a password in Supabase (the Google Play review account).
+// Everyone else signs in with an emailed code.
+function renderPasswordSignIn(msg) {
+  $("view").innerHTML = `<div class="panel setting" style="margin-top:8px">
+    <h2>Test account sign-in</h2><p class="sub">For review and test accounts that were given a password. Everyone else: use the emailed code.</p>
+    <label class="f" for="pwem">Email</label><input type="email" id="pwem" autocomplete="username">
+    <label class="f" for="pw">Password</label><input type="password" id="pw" autocomplete="current-password">
+    <div class="actions"><button class="btn" data-act="pwSignIn">Sign in</button><button class="btn ghost" data-act="changeEmail">Back</button></div>
     <div id="authMsg" class="${msg ? "err" : "hint"}">${esc(msg || "")}</div></div>`;
+}
+async function passwordSignIn(btn) {
+  const email = ($("pwem")?.value || "").trim(), password = $("pw")?.value || "";
+  if (!email || !password) return renderPasswordSignIn("Enter the email and password.");
+  btn.disabled = true; btn.textContent = "Signing in…";
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) renderPasswordSignIn(/invalid/i.test(error.message) ? "That email and password don't match a test account." : error.message);
+  // on success, onAuthStateChange loads the app
 }
 let resendTimer = null;
 async function sendLink(email) {
@@ -792,6 +811,8 @@ document.addEventListener("click", async (e) => {
       case "resendLink": return sendLink(a.dataset.email);
       case "verifyCode": return verifyCode(a);
       case "changeEmail": return renderSignIn();
+      case "pwMode": return renderPasswordSignIn();
+      case "pwSignIn": return passwordSignIn(a);
       case "closeDlg": return closeDlg();
       case "applyUpdate": S.waitingSW?.postMessage("skipWaiting"); return;
       case "enablePush": return enablePush();
@@ -976,6 +997,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;
   if (e.target.id === "em") sendLink();
   else if (e.target.id === "otp") document.querySelector('[data-act="verifyCode"]')?.click();
+  else if (e.target.id === "pw") document.querySelector('[data-act="pwSignIn"]')?.click();
   else if (e.target.id === "su") document.querySelector('[data-act="sleeperFind"]')?.click();
   else if (e.target.id === "tn") document.querySelector('[data-act="saveTeam"],[data-act="saveTeamSettings"]')?.click();
 });
