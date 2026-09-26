@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.5.5"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.5.8"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -450,7 +450,7 @@ function newTeamDlg() {
     <div class="actions" style="flex-direction:column;align-items:stretch">
       <button class="btn" data-act="linkEspn">Link an ESPN league</button>
       <button class="btn" data-act="linkSleeper">Link a Sleeper league (beta)</button>
-      <button class="btn" data-act="linkYahoo">Link a Yahoo league (beta)</button>
+      <button class="btn ghost" data-act="yahooSoon">Yahoo leagues (coming soon)</button>
       <button class="btn ghost" data-act="joinManual">Join with an invite link</button>
       <button class="btn ghost" data-act="manualTeam">Enter a team by hand</button>
     </div>`);
@@ -905,6 +905,8 @@ document.addEventListener("click", async (e) => {
       case "linkEspn": return espnDlg();
       case "linkSleeper": return sleeperDlg();
       case "linkYahoo": return yahooDlg();
+      // Yahoo now requires approval for its Fantasy API; switch the button back to linkYahoo once approved
+      case "yahooSoon": return toast("Yahoo is coming soon", "Yahoo is reviewing our access request. Until then, add your Yahoo team by hand with Enter a team by hand.");
       case "yahooSignIn": return yahooSignIn(a);
       case "yahooLink": {
         a.disabled = true; a.textContent = "Linking…";
