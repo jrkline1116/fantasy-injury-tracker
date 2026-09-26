@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.5.1"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.5.2"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -581,11 +581,30 @@ async function yahooSignIn(a) {
   S.yahooWaiting = true;
   location.href = r.url;
 }
+// iPhone/iPad in Safari (not the home-screen app): push only works from the home-screen app,
+// and that app has its own sign-in, so people need a heads-up after joining in Safari.
+const iosBrowser = () => {
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const standalone = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+  return ios && !standalone;
+};
+function iosNextStepsDlg(title) {
+  openDlg(`<h3>${esc(title)}</h3>
+    <p class="sub">One more step on iPhone: alerts only work from the home-screen app.</p>
+    <ol style="padding-left:20px;margin:10px 0;line-height:1.5">
+      <li>Tap the <b>Share</b> button at the bottom of Safari (the square with an arrow).</li>
+      <li>Scroll down and tap <b>Add to Home Screen</b>, then <b>Add</b>.</li>
+      <li>Open <b>Injury Assist</b> from your home screen and <b>sign in again</b> with the same email. The home-screen app keeps its own sign-in, so you'll get a new code.</li>
+      <li>Your team will already be there. Go to <b>Settings</b> and turn on notifications.</li>
+    </ol>
+    <div class="actions"><button class="btn" data-act="closeDlg">Got it</button></div>`);
+}
 async function afterLink(r, label) {
   await refresh(true);
   if (r.teamId) {
     S.activeTeam = r.teamId; localStorage.setItem("fit-team", r.teamId);
     closeDlg(); location.hash = "teams"; render();
+    if (iosBrowser()) return iosNextStepsDlg(`${label === "Team" ? "Team claimed" : `${label} linked`}`);
     toast(`${label} linked`, "Your roster is in, with QB and teammate links added. It stays in sync automatically.");
   } else {
     S.pendingJoin = r.inviteCode; joinDlg("We couldn't tell which team is yours. Pick it below.");
