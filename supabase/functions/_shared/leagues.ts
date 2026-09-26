@@ -199,7 +199,8 @@ export async function yahooAuthUrl(userId: string, returnTo: string) {
   if (!APP_URLS.some((u) => back.startsWith(u))) throw new Error("Open the app from its normal address and try again.");
   const payload = b64u(new TextEncoder().encode(JSON.stringify({ u: userId, r: back, t: Date.now() })));
   const sig = b64u(new Uint8Array(await crypto.subtle.sign("HMAC", await stateKey(), new TextEncoder().encode(payload))));
-  const q = new URLSearchParams({ client_id: c.id, redirect_uri: c.redirect, response_type: "code", state: `${payload}.${sig}` });
+  // ask for Fantasy Sports read access explicitly; newer Yahoo apps otherwise issue sign-in-only tokens
+  const q = new URLSearchParams({ client_id: c.id, redirect_uri: c.redirect, response_type: "code", scope: "fspt-r", state: `${payload}.${sig}` });
   return `${Y_AUTH}/request_auth?${q}`;
 }
 export async function readYahooState(state: string): Promise<{ u: string; r: string; t: number }> {
@@ -254,6 +255,11 @@ export async function yahooConnected(admin: Admin, userId: string) {
 async function yahooGet(creds: YahooCreds, path: string) {
   const res = await fetch(`${Y_API}${path}${path.includes("?") ? "&" : "?"}format=json`, { headers: { Authorization: `Bearer ${creds.access_token}`, accept: "application/json" } });
   if (res.status === 401) throw new ReconnectError("Yahoo sign-in expired. Reconnect Yahoo.");
+  if (res.status === 403) {
+    const body = await res.text().catch(() => "");
+    console.error("Yahoo 403", path, body.slice(0, 500));
+    throw new ReconnectError("Yahoo didn't give this app access to your fantasy data. Sign in with Yahoo again and tap Agree.");
+  }
   if (!res.ok) {
     // pass along Yahoo's own explanation (JSON or XML error body) so problems are diagnosable
     const body = await res.text().catch(() => "");
