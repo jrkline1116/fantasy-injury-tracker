@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.5.2"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.5.3"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -299,9 +299,12 @@ function rowNote(r, p, st) {
     .filter(([, s]) => s && s.status !== "ACT" && s.detail)
     .sort(([, a], [, b]) => String(b.updated_at).localeCompare(String(a.updated_at)))[0];
   if (!hurt) return "";
-  const lp = P(hurt[0].player_id);
-  return `<span class="rnote">${esc(short(lp))}: ${esc(trim(hurt[1].detail))}</span>`;
+  const lp = P(hurt[0].player_id), name = short(lp), d = hurt[1].detail;
+  // news notes usually start with the player's name already ("Williams (hamstring) was..."): don't repeat it
+  const text = new RegExp(`^\\W*(${reEsc(lp.full_name)}|${reEsc(name)})\\b`, "i").test(d) ? d : `${name}: ${d}`;
+  return `<span class="rnote">${esc(trim(text))}</span>`;
 }
+const reEsc = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const trim = (t) => (t.length > 110 ? t.slice(0, 107).replace(/[\s,;:]+$/, "") + "…" : t);
 function rowLineup({ i, r, slot }) {
   const sel = `<select class="slotsel" data-slotrow="${i}" data-rid="${r ? r.id : ""}" aria-label="Lineup slot"${synced(team()) ? " disabled" : ""}>${SLOTS.map(([v, l]) => `<option value="${v}"${v === slot ? " selected" : ""}>${l}</option>`).join("")}</select>`;
@@ -669,9 +672,9 @@ function playerDlg(rosterId) {
     ${r.slot === "bench" && ["Q", "D"].includes(st?.status) ? `<div class="bannerbox" style="margin-top:12px"><span>He's ${esc(stLabel(st.status))} on your bench. Get told who to swap if he's cleared?</span><button class="btn small" data-act="addRule" data-trigger="${esc(p.id)}">Set rule</button></div>`
       : `<div class="actions"><button class="btn ghost small" data-act="addRule" data-trigger="${esc(p.id)}">Add if/then rule</button></div>`}
     <h2>Why you're watching</h2>
-    ${links.length ? `<div class="panel">${links.map((l) => { const lp = P(l.player_id); return `<div class="row linkrow"><span class="who"><span class="name">${badge(statusOf(lp.id), 1)} ${esc(lp.full_name)}</span><br><span class="meta">${esc(lp.pos)}, ${esc(lp.team || "FA")}, ${esc(LINK_KINDS[l.kind].toLowerCase())}</span>${noteBlock(lp.id)}
+    ${links.length ? `<div class="panel">${links.map((l) => { const lp = P(l.player_id); const note = noteBlock(lp.id); return `<div class="row linkrow" style="flex-wrap:wrap"><span class="who"><span class="name">${badge(statusOf(lp.id), 1)} ${esc(lp.full_name)}</span><br><span class="meta">${esc(lp.pos)}, ${esc(lp.team || "FA")}, ${esc(LINK_KINDS[l.kind].toLowerCase())}</span>
       </span><select data-linknotify="${l.id}" aria-label="Alerts for ${esc(lp.full_name)}" style="width:auto">${["inherit", "all", "impact", "mute"].map((v) => `<option value="${v}"${l.notify === v ? " selected" : ""}>${v === "inherit" ? "Default" : v === "impact" ? "Out/cleared" : NOTIFY[v]}</option>`).join("")}</select>
-      <button class="btn ghost small" data-unlink="${l.id}" data-roster="${r.id}" aria-label="Remove link to ${esc(lp.full_name)}">Remove</button></div>`; }).join("")}</div>` : `<p class="sub">No linked players yet. Add the QB, the back ahead of him, or anyone whose status changes his value.</p>`}
+      <button class="btn ghost small" data-unlink="${l.id}" data-roster="${r.id}" aria-label="Remove link to ${esc(lp.full_name)}">Remove</button>${note ? `<div style="flex-basis:100%;min-width:0">${note}</div>` : ""}</div>`; }).join("")}</div>` : `<p class="sub">No linked players yet. Add the QB, the back ahead of him, or anyone whose status changes his value.</p>`}
     <label class="f">Add a link</label>
     <select id="lk" aria-label="Link type" style="margin-bottom:8px">${Object.entries(LINK_KINDS).map(([k, v]) => `<option value="${k}"${(p.pos === "RB" ? "teammate" : "qb") === k ? " selected" : ""}>${v}</option>`).join("")}</select>
     <div class="hint" style="margin-top:-4px">"Ahead of him" = if that player is out, yours gets more work. "Handcuff" = the player behind yours.</div>
