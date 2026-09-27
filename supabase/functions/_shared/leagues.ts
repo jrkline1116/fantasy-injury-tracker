@@ -441,8 +441,15 @@ export async function syncLeague(admin: Admin, league: any, opts: { quiet?: bool
       : league.platform === "yahoo" ? await fetchYahoo(admin, league.external_id, league.linked_by)
       : await fetchEspn(league.external_id, league.season, creds);
   } catch (e) {
-    const reconnect = e instanceof ReconnectError;
-    await admin.from("leagues").update({ status: reconnect ? "reconnect" : "error", last_error: (e as Error).message }).eq("id", league.id);
+    let reconnect = e instanceof ReconnectError;
+    let message = (e as Error).message;
+    // A single rejected request can be ESPN/Yahoo having a bad minute, not an expired login. Background syncs only
+    // pause the league (and bother the linker) after 3 rejections in a row; linking (quiet) still reports it right away.
+    if (reconnect && !opts.quiet && league.status !== "reconnect") {
+      const strikes = Number(/^\[login check (\d)\/3\]/.exec(league.last_error ?? "")?.[1] ?? 0) + 1;
+      if (strikes < 3) { reconnect = false; message = `[login check ${strikes}/3] ${message}`; }
+    }
+    await admin.from("leagues").update({ status: reconnect ? "reconnect" : "error", last_error: message }).eq("id", league.id);
     if (reconnect && !opts.quiet) {
       await deliver(admin, [{
         user_id: league.linked_by, kind: "roster", title: `Reconnect ${league.name}`,
