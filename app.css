@@ -164,3 +164,11 @@ button,select,input,a{touch-action:manipulation;-webkit-tap-highlight-color:tran
 .prac .p-DNP{color:var(--out)}
 .prac .p-LP{color:var(--d)}
 .prac .p-FP{color:var(--act)}
+
+/* 2.6.0: spam reminder, alert day headers, older-alerts expander */
+.spam{margin:14px 0 10px;padding:12px 14px;border:2px solid var(--q);border-radius:10px;background:var(--surface2);text-align:left;font-size:.92rem;line-height:1.4}
+.spam b:first-child{display:block;font-size:1rem;margin-bottom:3px}
+.dayhead{padding:10px 14px 6px;font:700 .82rem/1 var(--cond);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--surface2);border-top:1px solid var(--line)}
+.panel > .dayhead:first-child{border-top:0;border-radius:10px 10px 0 0}
+.dayhead + .alert{border-top:0}
+.older{display:block;width:100%;padding:12px 14px;border:0;border-top:1px solid var(--line);background:none;color:var(--brand);font-weight:600;text-align:center;border-radius:0 0 10px 10px}

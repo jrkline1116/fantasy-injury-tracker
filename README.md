@@ -120,6 +120,12 @@ Titles always show the move (from → to). Lines use **UPGRADE** or **DOWNGRADE*
 
 The default alert setting, **Out or cleared**, fires when a player is ruled out (Out, IR, suspended), comes back off it (including Out → Questionable), or is fully cleared. It skips new Questionable and Doubtful tags on healthy players. **Everything** includes those tags too.
 
+**During games:** once a player's game kicks off (lineups locked), the only alert about him is "your starter got hurt." QB, handcuff, linked-player, and bench alerts, and if/then rules, wait until the game is over.
+
+**Mondays:** with *Hold Monday news until Tuesday* on (the default), updates for players who already played that week are saved instead of pushed. Monday night players still alert live.
+
+**Tuesday 8am (each user's time zone):** the weekly waiver report lists Out, Doubtful, IR, and suspended players plus next week's byes, each with a suggested backup (your bench first, then the next man up on his NFL depth chart, then the most-added healthy free agent on Sleeper's trending list). Linked leagues mark each backup available or taken from the league rosters. The report ends with Monday's held updates, one line per player with his latest status. Then the alert history clears.
+
 **If/then rules** are set per team (Add rule, or from a player's screen). They fire once, always come through even in quiet hours, and clear themselves on Tuesday. The pre-game check also lists rules still waiting on a Questionable player. The app can't change your ESPN lineup for you; the alert tells you exactly what to swap.
 
 ## League sync (ESPN + Sleeper)

@@ -5,12 +5,14 @@
 //   Held quiet-hours alerts            every run
 //   Pre-game check                     every run when games are close
 //   Bye-week warning                   every 30 min (sends Thursday 9am local)
+//   Tuesday waiver report + auto-clear every 10 min (sends Tuesday 8am local, once per user)
 //   Expired if/then rules cleanup      every hour
 import { syncLeague } from "../_shared/leagues.ts";
 import { parsePractice, practiceDigest, savePractice } from "../_shared/practice.ts";
+import { weeklyJob } from "../_shared/weekly.ts";
 import {
   adminClient, newsAlerts, byeLines, deliver, fetchAll, inChunks, json, loadUser, loadWatchers,
-  localClock, mapStatus, normName, normTeam, pregameLines, pushAlert, statusAlerts,
+  localClock, mapStatus, normName, normTeam, pregameLines, pushAlert, statusAlerts, weekContext,
   type Admin, type AlertRow,
 } from "../_shared/core.ts";
 
@@ -69,7 +71,7 @@ Deno.serve(async (req) => {
   const games = gamesData ?? [];
   const hot = games.some((g) => { const k = new Date(g.kickoff).getTime(); return k - now.getTime() < 3 * 3600e3 && now.getTime() - k < 4 * 3600e3; });
 
-  if (due("injuries", hot ? 2 : 15)) await run("injuries", () => pollInjuries(admin, now, !state.injuries));
+  if (due("injuries", hot ? 2 : 15)) await run("injuries", async () => pollInjuries(admin, now, !state.injuries, await weekContext(admin, now)));
   await run("held", () => sendHeld(admin, now));
   if (games.some((g) => { const m = (new Date(g.kickoff).getTime() - now.getTime()) / 60000; return m > 0 && m <= 125; })) {
     await run("pregame", () => pregame(admin, now, games));
@@ -84,6 +86,7 @@ Deno.serve(async (req) => {
     return out;
   });
   if (due("practice", 20)) await run("practice", () => practiceDigest(admin, now));
+  if (due("weekly", 10)) await run("weekly", () => weeklyJob(admin, now));
   if (due("cleanup", 60)) await run("cleanup", async () => {
     const { count } = await admin.from("rules").delete({ count: "exact" }).lt("expires_at", new Date(now.getTime() - 86400e3).toISOString());
     return { rulesRemoved: count ?? 0 };
@@ -132,7 +135,18 @@ async function syncPlayers(admin: Admin) {
 /* ---------- schedule from ESPN ---------- */
 async function syncSchedule(admin: Admin) {
   const d = await espnJson(ESPN_SCOREBOARD);
-  const rows = (d.events ?? []).map((ev: any) => {
+  const events = [...(d.events ?? [])];
+  // also load next week, so Tuesday's waiver report knows next week's byes
+  const wk = Number(d.week?.number), type = Number(d.season?.type);
+  let nextWeek: unknown = null;
+  if (wk && type === 2 && wk < 18) {
+    try {
+      const n = await espnJson(`${ESPN_SCOREBOARD}?seasontype=2&week=${wk + 1}${d.season?.year ? `&dates=${d.season.year}` : ""}`);
+      for (const ev of n.events ?? []) events.push({ ...ev, week: ev.week ?? { number: wk + 1 } });
+      nextWeek = (n.events ?? []).length;
+    } catch (e) { nextWeek = `error: ${(e as Error).message}`; }
+  }
+  const rows = events.map((ev: any) => {
     const cs = ev.competitions?.[0]?.competitors ?? [];
     return {
       id: String(ev.id), season: ev.season?.year ?? d.season?.year ?? null, week: ev.week?.number ?? d.week?.number ?? null,
@@ -145,7 +159,7 @@ async function syncSchedule(admin: Admin) {
     const { error } = await admin.from("games").upsert(rows, { onConflict: "id" });
     if (error) throw error;
   }
-  return { games: rows.length };
+  return { games: rows.length, nextWeek };
 }
 
 /* ---------- injury statuses from ESPN ---------- */
@@ -176,7 +190,7 @@ function extractInjuries(data: unknown): Inj[] {
   return out;
 }
 
-async function pollInjuries(admin: Admin, now: Date, firstRun: boolean) {
+async function pollInjuries(admin: Admin, now: Date, firstRun: boolean, week: Awaited<ReturnType<typeof weekContext>>) {
   const entries = extractInjuries(await espnJson(ESPN_INJURIES));
   if (entries.length < 50) throw new Error(`injury feed looked incomplete (${entries.length} entries); skipped`);
 
@@ -238,7 +252,7 @@ async function pollInjuries(admin: Admin, now: Date, firstRun: boolean) {
     const news = noteOnly.filter((n) => n.detail && !parsePractice(n.detail, now)).map((n) => ({ playerId: n.player_id, note: n.detail as string }));
     if (news.length) {
       const nctx = await loadWatchers(admin, news.map((n) => n.playerId));
-      if (nctx) newsPushed = await deliver(admin, newsAlerts(nctx, news, { now }));
+      if (nctx) newsPushed = await deliver(admin, newsAlerts(nctx, news, { now, week }));
     }
   }
   if (!changes.length) return { entries: entries.length, changes: 0, notes: noteOnly.length, practiceSaved, newsPushed };
@@ -250,7 +264,7 @@ async function pollInjuries(admin: Admin, now: Date, firstRun: boolean) {
   const ctx = await loadWatchers(admin, changes.map((c) => c.playerId));
   if (!ctx) return { entries: entries.length, changes: changes.length, alerts: 0 };
   for (const c of changes) ctx.statuses.set(c.playerId, c.to);
-  const pushed = await deliver(admin, statusAlerts(ctx, changes, { now }));
+  const pushed = await deliver(admin, statusAlerts(ctx, changes, { now, week }));
   if (ctx.fired.length) await admin.from("rules").update({ fired_at: now.toISOString() }).in("id", ctx.fired);
   return { entries: entries.length, changes: changes.length, pushed, rulesFired: ctx.fired.length };
 }

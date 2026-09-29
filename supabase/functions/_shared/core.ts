@@ -7,6 +7,7 @@ export type Line = { team: string; text: string };
 export type AlertRow = {
   user_id: string; kind: string; status?: string | null; title: string; lines: Line[];
   dedupe_key: string; held_until: string | null; push: boolean;
+  player_id?: string | null; from_status?: string | null; monday_hold?: boolean;
 };
 
 export function adminClient(): Admin {
@@ -67,10 +68,12 @@ export async function inChunks<T>(ids: string[], q: (ids: string[]) => PromiseLi
 export type Settings = {
   user_id: string; mode: string; tx_on: boolean; tx_minutes: number; upside: boolean; bye: boolean;
   quiet_on: boolean; quiet_start: string; quiet_end: string; timezone: string;
+  news?: boolean; practice?: boolean; hold_monday?: boolean; waiver?: boolean; last_weekly?: string | null;
 };
 export const defaultSettings = (user_id: string): Settings => ({
   user_id, mode: "all", tx_on: true, tx_minutes: 10, upside: true, bye: true,
   quiet_on: true, quiet_start: "22:00", quiet_end: "07:00", timezone: "America/Phoenix",
+  news: true, practice: true, hold_monday: true, waiver: true, last_weekly: null,
 });
 export function localClock(tz: string, d = new Date()): { min: number; weekday: string } {
   let parts: Intl.DateTimeFormatPart[];
@@ -92,6 +95,42 @@ export function quietHoldUntil(s: Settings, now = new Date()): Date | null {
   if (!inside) return null;
   return new Date(now.getTime() + ((b - min + 1440) % 1440) * 60000);
 }
+
+/* ---------- the NFL week: games in progress, games already played ----------
+   live     games kicked off in the last ~4 hours (in progress): lineups locked, only starter injuries alert
+   started  every game this week that has kicked off (weeks run Tuesday to Tuesday): used for if/then rules
+   played   games from the last 6 days that were NOT on Monday: their news is held on Monday (see mondayHold) */
+export type WeekCtx = { live: Set<string>; started: Set<string>; played: Set<string> };
+export const WEEKLY_MIN = 8 * 60;          // Tuesday report + auto-clear run at 8:00am in each user's time zone
+const LIVE_MS = 4.25 * 3600e3;
+/** Most recent Tuesday 12:00 UTC (early Tuesday morning in the US): the start of this NFL week. */
+export function weekStart(now = new Date()): Date {
+  const d = new Date(now); d.setUTCHours(12, 0, 0, 0);
+  while (d.getUTCDay() !== 2 || d.getTime() > now.getTime()) d.setUTCDate(d.getUTCDate() - 1);
+  return d;
+}
+const easternDay = (d: Date) => new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short" }).format(d);
+export async function weekContext(admin: Admin, now = new Date()): Promise<WeekCtx> {
+  const since = new Date(Math.min(weekStart(now).getTime(), now.getTime() - 6 * 86400e3)).toISOString();
+  const { data } = await admin.from("games").select("home,away,kickoff").gte("kickoff", since).lte("kickoff", now.toISOString());
+  const ws = weekStart(now).getTime(), t = now.getTime();
+  const live = new Set<string>(), started = new Set<string>(), played = new Set<string>();
+  for (const g of data ?? []) {
+    const k = new Date(g.kickoff).getTime();
+    const add = (s: Set<string>) => { s.add(g.home); s.add(g.away); };
+    if (t - k < LIVE_MS) add(live);
+    if (k >= ws) add(started);
+    if (t - k >= LIVE_MS && easternDay(new Date(g.kickoff)) !== "Mon") add(played);
+  }
+  return { live, started, played };
+}
+/** Hold window for "Hold Monday news until Tuesday": all of Monday, and Tuesday until the 8am report. */
+export function mondayHold(st: Settings, now = new Date()): boolean {
+  if (st.hold_monday === false) return false;
+  const { min, weekday } = localClock(st.timezone, now);
+  return weekday === "Mon" || (weekday === "Tue" && min < WEEKLY_MIN);
+}
+const inSet = (set: Set<string> | undefined, p?: Player | null) => !!set && !!p?.team && set.has(p.team);
 
 /* ---------- loading a user's teams ---------- */
 export type Player = { id: string; full_name: string; pos: string; team: string | null; depth_order: number | null };
@@ -213,52 +252,66 @@ export function benchSnoozed(team: any, now = new Date()) {
   return !!team.bench_snooze_until && new Date(team.bench_snooze_until).getTime() > now.getTime();
 }
 
-/** Injury news: a watched injured player's report changed (same status). One alert per player per new note. */
-export function newsAlerts(ctx: Ctx, items: { playerId: string; note: string }[], opts: { now: Date }): AlertRow[] {
+/** Where a finished alert goes: pushed now, held for quiet hours, or held for Tuesday's report (Monday hold). */
+function finish(st: Settings, opts: { now: Date; test?: boolean; week?: WeekCtx }, pl: Player, urgent: boolean) {
+  const monday = !opts.test && inSet(opts.week?.played, pl) && mondayHold(st, opts.now);
+  if (monday) return { push: false, monday_hold: true, held_until: null };
+  const held = urgent || opts.test ? null : quietHoldUntil(st, opts.now);
+  return { push: true, monday_hold: false, held_until: held ? held.toISOString() : null };
+}
+
+/** Injury news: a watched injured player's report changed (same status). One alert per player per new note.
+ *  While his game is in progress, only his fantasy starters hear about it. */
+export function newsAlerts(ctx: Ctx, items: { playerId: string; note: string }[], opts: { now: Date; week?: WeekCtx }): AlertRow[] {
   const out: AlertRow[] = [];
   const hash = (t: string) => { let h = 0; for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
   for (const it of items) {
     const pl = ctx.players.get(it.playerId);
     const status = ctx.statuses.get(it.playerId) ?? "ACT";
     if (!pl || !it.note || status === "ACT") continue;
+    const live = inSet(opts.week?.live, pl);
     const byUser = new Map<string, Line[]>();
     for (const t of ctx.teams) {
       const st = ctx.settings.get(t.user_id)!;
-      if ((st as any).news === false) continue;
+      if (st.news === false) continue;
       const benchQuiet = benchSnoozed(t, opts.now);
       const add = (text: string) => { const a = byUser.get(t.user_id) ?? []; a.push({ team: t.name, text }); byUser.set(t.user_id, a); };
       const troster = ctx.roster.filter((r) => r.team_id === t.id);
       for (const r of troster.filter((r) => r.player_id === it.playerId)) {
-        if (r.slot === "bench" && benchQuiet) continue;
+        if (r.slot === "bench" && (benchQuiet || live)) continue;
         const lv = level(st, t, r, null);
         if (lv === "off" || lv === "mute") continue;
         add(`${r.slot === "start" ? "In your lineup" : "On your bench"} · ${it.note}`);
       }
+      if (live) continue; // in-game: no linked-player news
       for (const l of ctx.links.filter((x) => x.team_id === t.id && x.player_id === it.playerId)) {
         const r = troster.find((x) => x.id === l.roster_id), fp = r && ctx.players.get(r.player_id);
-        if (!r || !fp || (r.slot === "bench" && benchQuiet)) continue;
+        if (!r || !fp || (r.slot === "bench" && benchQuiet) || inSet(opts.week?.live, fp)) continue;
         const lv = level(st, t, r, l);
         if (lv === "off" || lv === "mute") continue;
         add(`→ watch ${names(pl, fp)[1]} · ${it.note}`);
       }
     }
     for (const [uid, lines] of byUser) {
-      const held = quietHoldUntil(ctx.settings.get(uid)!, opts.now);
       out.push({
         user_id: uid, kind: "news", status, title: `${shortName(pl)} ${pl.pos}, ${pl.team ?? "FA"} · ${word(status)} · update`,
-        lines, dedupe_key: `news:${uid}:${it.playerId}:${hash(it.note)}`, held_until: held ? held.toISOString() : null, push: true,
+        lines, dedupe_key: `news:${uid}:${it.playerId}:${hash(it.note)}`, player_id: it.playerId, from_status: status,
+        ...finish(ctx.settings.get(uid)!, opts, pl, false),
       });
     }
   }
   return out;
 }
 
-export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; test?: boolean }): AlertRow[] {
+/** Status changes. Once the trigger's game is in progress, only "your starter got hurt" alerts go out:
+ *  no QB / handcuff / linked / bench alerts and no if/then rules for that game. */
+export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; test?: boolean; week?: WeekCtx }): AlertRow[] {
   const out: AlertRow[] = [];
   for (const ch of changes) {
     const pl = ctx.players.get(ch.playerId);
     if (!pl) continue;
     const m = classify(ch.from, ch.to), isOut = m.out;
+    const live = !opts.test && inSet(opts.week?.live, pl);
     const byUser = new Map<string, { lines: Line[]; urgent: boolean }>();
 
     for (const t of ctx.teams) {
@@ -271,10 +324,11 @@ export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; tes
       const tlinks = ctx.links.filter((l) => l.team_id === t.id);
       const benchQuiet = benchSnoozed(t, opts.now);
 
-      // 1. your if/then rules (always fire; they're explicit)
+      // 1. your if/then rules (always fire; they're explicit) unless either player's game has kicked off: the swap can't be made
       let ruleFired = false;
       for (const rule of ctx.rules.filter((x) => x.team_id === t.id && x.trigger_player_id === ch.playerId)) {
         if (!ruleMet(rule, ch.from, ch.to)) continue;
+        if (!opts.test && (inSet(opts.week?.started, ctx.players.get(rule.start_player_id)) || inSet(opts.week?.started, ctx.players.get(rule.over_player_id)))) continue;
         const line = ruleLine(ctx, rule);
         if (!line) continue;
         add(line, true); ruleFired = true;
@@ -283,9 +337,16 @@ export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; tes
 
       // 2. the trigger is on your roster
       for (const r of troster.filter((r) => r.player_id === ch.playerId)) {
+        const starting = r.slot === "start";
+        if (live) {
+          // game in progress: only an active starter getting hurt
+          if (!starting || !(m.out || m.down)) continue;
+          if (level(st, t, r, null) === "off" || level(st, t, r, null) === "mute") continue;
+          add(`In your lineup · hurt during the game, now ${lower(ch.to)}`);
+          continue;
+        }
         if (r.slot === "bench" && benchQuiet) continue;
         if (!wants(level(st, t, r, null), ch.from, ch.to)) continue;
-        const starting = r.slot === "start";
         const where = starting ? "In your lineup" : "On your bench";
         if (!ruleFired) {
           if (m.out) add(`${where} · ${starting ? "swap him out" : "no change needed"}`);
@@ -308,11 +369,13 @@ export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; tes
         }
       }
 
-      // 3. the trigger is linked to one of your players
+      // 3. the trigger is linked to one of your players (skipped while either game is in progress)
+      if (live) continue;
       for (const l of tlinks.filter((l) => l.player_id === ch.playerId)) {
         const r = troster.find((x) => x.id === l.roster_id);
         const fp = r && ctx.players.get(r.player_id);
         if (!r || !fp) continue;
+        if (!opts.test && inSet(opts.week?.live, fp)) continue;
         if (r.slot === "bench" && benchQuiet) continue;
         if (!wants(level(st, t, r, l), ch.from, ch.to)) continue;
         const [trig, f] = names(pl, fp);
@@ -336,13 +399,13 @@ export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; tes
 
     for (const [uid, e] of byUser) {
       const st = ctx.settings.get(uid)!;
-      const held = isOut || e.urgent || opts.test ? null : quietHoldUntil(st, opts.now);
       out.push({
         user_id: uid, kind: opts.test ? "test" : "status", status: ch.to,
-        title: `${opts.test ? "Test: " : ""}${shortName(pl)} ${pl.pos}, ${pl.team ?? "FA"} · ${word(ch.from)} → ${word(ch.to)}`,
+        title: `${opts.test ? "Test: " : ""}${shortName(pl)} ${pl.pos}, ${pl.team ?? "FA"} · ${word(ch.from)} → ${word(ch.to)}${live ? " (in game)" : ""}`,
         lines: e.lines,
         dedupe_key: opts.test ? `test:${crypto.randomUUID()}` : `status:${uid}:${ch.playerId}:${ch.eventId ?? Date.now()}`,
-        held_until: held ? held.toISOString() : null, push: true,
+        player_id: ch.playerId, from_status: ch.from,
+        ...finish(st, opts, pl, isOut || e.urgent),
       });
     }
   }

@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.5.11"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.6.0"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -133,7 +133,8 @@ function renderLinkSent(email) {
     <input type="text" id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456" class="otp">
     <div class="actions"><button class="btn" data-act="verifyCode" data-email="${esc(email)}">Sign in</button></div>
     <div id="otpErr" class="err"></div>
-    <p class="sub">The email also has a sign-in link, but on iPhone use the code: links open in Safari instead of the app. It can take a minute to arrive; check spam if it's not there.</p>
+    <div class="spam" role="note"><b>Don't see it? Check your Spam or Junk folder.</b>If it's there, mark it <b>Not spam</b> so your injury alerts and future codes land in your inbox.</div>
+    <p class="sub">It can take a minute to arrive. The email also has a sign-in link, but on iPhone use the code: links open in Safari instead of the app.</p>
     <div class="actions"><button class="btn ghost" data-act="resendLink" data-email="${esc(email)}" disabled>Resend in 60s</button><button class="btn ghost" data-act="changeEmail">Use a different email</button></div></div>`;
   setTimeout(() => $("otp")?.focus(), 50);
   let left = 60;
@@ -175,7 +176,7 @@ async function refresh(silent) {
     sb.from("user_teams").select("*").order("sort").order("created_at"),
     sb.from("roster").select("*").order("created_at"),
     sb.from("links").select("*").order("created_at"),
-    sb.from("alerts").select("*").order("created_at", { ascending: false }).limit(60),
+    sb.from("alerts").select("*").order("created_at", { ascending: false }).limit(150),
     sb.from("accounts").select("plan,pro_until").maybeSingle(),
     sb.from("rules").select("*").gt("expires_at", new Date().toISOString()).order("created_at"),
   ]);
@@ -400,14 +401,31 @@ function viewAlerts() {
       ${tracked.length ? `<label class="f" for="simP">Simulate a status change</label><select id="simP">${tracked.map((p) => `<option value="${esc(p.id)}">${esc(p.full_name)} (${esc(p.pos)}, ${esc(p.team || "FA")}), now ${esc(stLabel(statusOf(p.id)))}</option>`).join("")}</select>
       <div class="grid2" style="margin-top:8px"><select id="simS" aria-label="New status">${Object.keys(STATUS).map((k) => `<option value="${k}"${k === "O" ? " selected" : ""}>${STATUS[k][0]}</option>`).join("")}</select><button class="btn small" data-act="simulate">Simulate</button></div>` : ""}
     </div>`;
+  const shown = S.showOlder ? S.alerts : S.alerts.slice(0, ALERTS_SHOWN);
+  const older = S.alerts.length - ALERTS_SHOWN;
+  let lastDay = "";
   const list = S.alerts.length
-    ? `<div class="panel">${S.alerts.map((a) => `<div class="alert"><div class="head">${a.status ? badge(a.status, 1) : `<span class="st T sm">${a.kind === "pregame" ? "T-" : a.kind === "bye" ? "BYE" : a.kind === "roster" ? "SYNC" : a.kind === "practice" ? "PRAC" : a.kind === "news" ? "NEWS" : "TEST"}</span>`}<span class="ttl">${esc(a.title)}</span><span class="time">${esc(when(a.created_at))}</span></div>
+    ? `<div class="panel">${shown.map((a) => {
+        const day = dayLabel(a.created_at), head = day !== lastDay ? `<div class="dayhead">${esc(day)}</div>` : "";
+        lastDay = day;
+        return `${head}<div class="alert"><div class="head">${a.status ? badge(a.status, 1) : `<span class="st T sm">${esc(KIND_TAG[a.kind] || "TEST")}</span>`}<span class="ttl">${esc(a.title)}</span><span class="time">${esc(timeOnly(a.created_at))}</span></div>
         <ul>${(a.lines || []).map((l) => `<li>${l.team ? `<span class="tm">${esc(l.team)}:</span> ` : ""}${esc(l.text)}</li>`).join("")}</ul>
-        ${a.held_until && !a.pushed_at ? `<div class="held">Held until ${esc(new Date(a.held_until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))} for quiet hours</div>` : ""}</div>`).join("")}</div>
+        ${a.monday_hold ? `<div class="held">Held for Tuesday's report (he already played this week)</div>` : a.held_until && !a.pushed_at ? `<div class="held">Held until ${esc(new Date(a.held_until).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))} for quiet hours</div>` : ""}</div>`;
+      }).join("")}${older > 0 ? `<button class="older" data-act="toggleOlder" aria-expanded="${!!S.showOlder}">${S.showOlder ? "Hide older alerts" : `Show older alerts (${older})`}</button>` : ""}</div>
+       <p class="sub" style="margin-top:8px">History clears itself every Tuesday morning after the waiver report.</p>
        <div class="actions"><button class="btn ghost small" data-act="clearAlerts">Clear alert history</button></div>`
     : `<p class="sub">No alerts yet. They'll show up here as well as on your phone.</p>`;
   return `<h2>Alert history</h2>${list}${tools}`;
 }
+const ALERTS_SHOWN = 15;
+const KIND_TAG = { pregame: "T-", bye: "BYE", roster: "SYNC", practice: "PRAC", news: "NEWS", report: "WK", test: "TEST" };
+function dayLabel(ts) {
+  const d = new Date(ts), today = new Date(), y = new Date(); y.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return "Today";
+  if (d.toDateString() === y.toDateString()) return "Yesterday";
+  return d.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+}
+const timeOnly = (ts) => new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 function trackedPlayers() {
   const ids = new Set([...S.roster.map((r) => r.player_id), ...S.links.map((l) => l.player_id)]);
   return [...ids].map(P).sort((a, b) => a.full_name.localeCompare(b.full_name));
@@ -441,6 +459,10 @@ function viewSettings() {
       <div class="hint">An alert whenever the injury report changes for a hurt player you have or are watching, even if his status didn't change.</div></div>
     <div class="setting"><div class="top"><span class="t">Practice reports</span><input type="checkbox" class="switch" data-toggle="practice" aria-label="Practice reports" ${s.practice !== false ? "checked" : ""}></div>
       <div class="hint">One evening summary on practice days: who didn't practice, was limited, or went full, for your players and the players they depend on.</div></div>
+    <div class="setting"><div class="top"><span class="t">Hold Monday news until Tuesday</span><input type="checkbox" class="switch" data-toggle="hold_monday" aria-label="Hold Monday news until Tuesday" ${s.hold_monday !== false ? "checked" : ""}></div>
+      <div class="hint">On Mondays, updates for players who already played that week wait for Tuesday morning, then arrive once with each player's latest status. Monday night players still alert live.</div></div>
+    <div class="setting"><div class="top"><span class="t">Weekly waiver report</span><input type="checkbox" class="switch" data-toggle="waiver" aria-label="Weekly waiver report" ${s.waiver !== false ? "checked" : ""}></div>
+      <div class="hint">Tuesday at 8am: your Out, Doubtful, IR, and suspended players plus next week's byes, each with a suggested backup. Linked leagues show whether the backup is available or taken.</div></div>
     <div class="setting"><div class="top"><span class="t">Bye-week warning</span><input type="checkbox" class="switch" data-toggle="bye" aria-label="Bye-week warning" ${s.bye ? "checked" : ""}></div>
       <div class="hint">Thursday at 9am when a starter's team is on bye.</div></div>
     <div class="setting"><div class="top"><span class="t">Quiet hours</span><input type="checkbox" class="switch" data-toggle="quiet_on" aria-label="Quiet hours" ${s.quiet_on ? "checked" : ""}></div>
@@ -473,7 +495,7 @@ function newTeamDlg() {
   openDlg(`<h3>Add a team</h3><p class="sub">Linked teams stay in sync automatically: trades, pickups, and lineup moves.</p>
     <div class="actions" style="flex-direction:column;align-items:stretch">
       <button class="btn" data-act="linkEspn">Link an ESPN league</button>
-      <button class="btn" data-act="linkSleeper">Link a Sleeper league (beta)</button>
+      <button class="btn" data-act="linkSleeper">Link a Sleeper league</button>
       <button class="btn ghost" data-act="yahooSoon">Yahoo leagues (coming soon)</button>
       <button class="btn ghost" data-act="joinManual">Join with an invite link</button>
       <button class="btn ghost" data-act="manualTeam">Enter a team by hand</button>
@@ -605,7 +627,7 @@ function espnDlg(prefill = {}) {
     <div id="dlgErr" class="err"></div>`);
 }
 function sleeperDlg() {
-  openDlg(`<h3>Link a Sleeper league <span class="tag">Beta</span></h3>
+  openDlg(`<h3>Link a Sleeper league</h3>
     <label class="f" for="su">Sleeper username</label><input type="text" id="su" autocomplete="off" autocapitalize="off">
     <div class="actions"><button class="btn" data-act="sleeperFind">Find my leagues</button></div><div id="sleeperOut"></div><div id="dlgErr" class="err"></div>`);
   setTimeout(() => $("su")?.focus(), 50);
@@ -1073,6 +1095,7 @@ document.addEventListener("click", async (e) => {
         a.disabled = false; await refresh();
         return r.note ? toast("No alert", r.note) : toast("Test alert sent", "Check your notifications.");
       }
+      case "toggleOlder": S.showOlder = !S.showOlder; return render();
       case "clearAlerts":
         if (!confirm("Clear your alert history?")) return;
         await sb.from("alerts").delete().eq("user_id", S.session.user.id); await refresh(); return;
