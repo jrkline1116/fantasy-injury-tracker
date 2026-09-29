@@ -7,6 +7,9 @@ supabase/.branches/
 
 # Never commit credentials (this repo is public)
 *.txt
+# ...except these two public site files, which must be at the site root
+!ads.txt
+!robots.txt
 *secret*
 *password*
 *PASSWORD*

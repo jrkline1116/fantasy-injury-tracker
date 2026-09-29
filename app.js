@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.6.0"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.7.0"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -37,10 +37,11 @@ if (!CONFIGURED) {
   sb.auth.onAuthStateChange((_e, session) => {
     const was = S.session?.user?.id;
     S.session = session;
+    document.documentElement.classList.toggle("in", !!session);
     if (!session) { S.loaded = false; renderSignIn(); }
     else if (session.user.id !== was) loadAll();
   });
-  sb.auth.getSession().then(({ data }) => { S.session = data.session; if (!data.session) renderSignIn(); else loadAll(); });
+  sb.auth.getSession().then(({ data }) => { S.session = data.session; document.documentElement.classList.toggle("in", !!data.session); if (!data.session) renderSignIn(); else loadAll(); });
 }
 function readHash() {
   const h = (location.hash || "#teams").slice(1);
@@ -57,7 +58,7 @@ function readHash() {
   }
   if (m) { S.pendingJoin = m[1]; history.replaceState(null, "", location.pathname + "#teams"); S.view = "teams"; }
   else if (y) { S.pendingYahoo = { err: y[2] ? decodeURIComponent(y[2]) : "" }; history.replaceState(null, "", location.pathname + "#teams"); S.view = "teams"; }
-  else S.view = h;
+  else S.view = ["teams", "alerts", "settings"].includes(h) ? h : "teams";
 }
 readHash();
 window.addEventListener("hashchange", () => { readHash(); if (S.loaded) { render(); if (S.pendingJoin) joinDlg(); else if (S.pendingYahoo) yahooReturn(); else if (S.pendingEspn) espnFromBookmark(); } });
@@ -73,12 +74,13 @@ setInterval(() => { if (document.visibilityState === "visible" && S.loaded && !u
 function renderSignIn(msg) {
   $("nav").hidden = true; $("tabs").innerHTML = "";
   const y = S.pendingYahoo;
-  $("view").innerHTML = `${y ? `<div class="panel note" style="margin-top:8px">${y.err ? `Yahoo sign-in didn't finish: ${esc(y.err)}` : "<b>Yahoo is connected.</b>"} Close this window to go back to the app${y.err ? " and try again" : ", where your Yahoo leagues are ready to link"}.</div>` : ""}<div class="panel setting" style="margin-top:8px">
-    <h2>Sign in</h2><p class="sub">We'll email you a sign-in code. No password needed.</p>
+  $("view").innerHTML = `${y ? `<div class="panel note" style="margin-top:8px">${y.err ? `Yahoo sign-in didn't finish: ${esc(y.err)}` : "<b>Yahoo is connected.</b>"} Close this window to go back to the app${y.err ? " and try again" : ", where your Yahoo leagues are ready to link"}.</div>` : ""}<div class="panel setting" id="signin" style="margin-top:8px">
+    <h2>Sign in or create your account</h2><p class="sub">Free. We'll email you a 6-digit code. No password needed.</p>
     <label class="f" for="em">Email</label><input type="email" id="em" autocomplete="email" placeholder="you@example.com" value="${esc(localStorage.getItem("fit-email") || "")}">
     <div class="actions"><button class="btn" data-act="sendLink">Email me a code</button></div>
     <div id="authMsg" class="${msg ? "err" : "hint"}">${esc(msg || "")}</div></div>
     <p class="sub" style="text-align:center;margin-top:14px"><button class="linkbtn" data-act="pwMode">Test account sign-in</button></p>`;
+  updateAds();
 }
 // Password sign-in, only for accounts created with a password in Supabase (the Google Play review account).
 // Everyone else signs in with an emailed code.
@@ -253,6 +255,28 @@ function render() {
   renderBanner();
   const v = $("view");
   v.innerHTML = S.view === "alerts" ? viewAlerts() : S.view === "settings" ? viewSettings() : viewTeams();
+  updateAds();
+}
+
+/* ---------------- ads (website only) ----------------
+   One responsive AdSense unit in #adbox (index.html), below everything else on the page. It's created the first
+   time it's visible and never re-created, because re-rendering ads on a timer breaks AdSense rules.
+   Off when config.js has no ADSENSE_CLIENT / ADSENSE_SLOT, always off inside the Google Play app
+   (the Play listing says no ads), and hidden on the Settings screen. */
+const inPlayApp = () => { try { return sessionStorage.getItem("fit-play") === "1"; } catch { return false; } };
+let adLoaded = false;
+function updateAds() {
+  const box = $("adbox");
+  const ok = !!(CFG.ADSENSE_CLIENT && CFG.ADSENSE_SLOT) && !inPlayApp() && !(S.session && S.view === "settings");
+  box.hidden = !ok;
+  if (!ok || adLoaded) return;
+  adLoaded = true;
+  box.innerHTML = `<div class="adlabel">Advertisement</div><ins class="adsbygoogle" style="display:block" data-ad-client="${esc(CFG.ADSENSE_CLIENT)}" data-ad-slot="${esc(CFG.ADSENSE_SLOT)}" data-ad-format="auto" data-full-width-responsive="true"></ins>`;
+  const js = document.createElement("script");
+  js.async = true; js.crossOrigin = "anonymous";
+  js.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(CFG.ADSENSE_CLIENT)}`;
+  document.head.appendChild(js);
+  try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch { /* ad blocker */ }
 }
 function renderBanner() {
   const b = $("banner");
@@ -922,6 +946,7 @@ async function enablePush() {
 
 /* ---------------- events ---------------- */
 document.addEventListener("click", async (e) => {
+  const sc = e.target.closest("[data-scroll]"); if (sc) { e.preventDefault(); const el = $(sc.dataset.scroll); el?.scrollIntoView({ behavior: "smooth", block: "center" }); if (sc.dataset.scroll === "signin") setTimeout(() => $("em")?.focus({ preventScroll: true }), 400); return; }
   const nav = e.target.closest("[data-nav]"); if (nav) { location.hash = nav.dataset.nav; window.scrollTo(0, 0); return; }
   const tb = e.target.closest("[data-team]"); if (tb) { S.activeTeam = tb.dataset.team; localStorage.setItem("fit-team", S.activeTeam); render(); return; }
   const pick = e.target.closest("[data-pick]"); if (pick && searchPick) { searchPick({ id: pick.dataset.pick, name: pick.dataset.name, pos: pick.dataset.pos, team: pick.dataset.nflteam }); return; }
