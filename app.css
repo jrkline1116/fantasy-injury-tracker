@@ -196,3 +196,7 @@ button,select,input,a{touch-action:manipulation;-webkit-tap-highlight-color:tran
 .foot{margin:24px 0 8px;text-align:center}
 .adwrap{margin-top:22px;margin-bottom:8px;min-height:0}
 .adlabel{font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);text-align:center;margin-bottom:4px}
+
+/* 2.7.2: sister-site line at the bottom of the app (signed in only) */
+.xpromo{display:none;margin:22px auto 8px;text-align:center;font-size:.85rem;color:var(--muted)}
+.in .xpromo{display:block}
