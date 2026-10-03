@@ -115,7 +115,7 @@ dialog::backdrop{background:rgba(10,15,20,.55)}
 @media (prefers-reduced-motion: reduce){.toast,.switch::after{transition:none}}
 /* lineup grid: slot | player | status */
 .lineup{overflow:visible}
-.lrow{display:grid;grid-template-columns:88px 1fr 44px;gap:8px;align-items:start;padding:7px 10px;border-top:1px solid var(--line)}
+.lrow{display:grid;grid-template-columns:88px 1fr 44px 34px;gap:8px;align-items:start;padding:7px 10px;border-top:1px solid var(--line)}
 .lrow:first-child{border-top:0}
 .lrow .slotsel{padding:8px 6px;font:700 .9rem/1 var(--cond);letter-spacing:.03em}
 .lname{position:relative;min-width:0}
@@ -200,3 +200,11 @@ button,select,input,a{touch-action:manipulation;-webkit-tap-highlight-color:tran
 /* 2.7.2: sister-site line at the bottom of the app (signed in only) */
 .xpromo{display:none;margin:22px auto 8px;text-align:center;font-size:.85rem;color:var(--muted)}
 .in .xpromo{display:block}
+
+/* 2.8.0: per-player snooze bell */
+.bell{display:flex;align-items:center;justify-content:center;width:34px;height:36px;margin-top:2px;padding:0;border:0;border-radius:8px;background:none;color:var(--muted);cursor:pointer}
+.bell:hover{background:var(--surface2)}
+.bell:active{opacity:.65}
+.bell:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
+.bell.off{color:var(--ink)}
+.lrow.quiet .pbtn .name,.lrow.quiet .lst{opacity:.55}

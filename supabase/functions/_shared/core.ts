@@ -227,7 +227,12 @@ const going = (from: string, to: string) => classify(from, to).out;
 function isImpact(from: string, to: string) { const m = classify(from, to); return m.out || m.back || m.clear; }
 const lower = (s: string) => word(s).toLowerCase();
 
+/** Bell on the Teams screen: this roster player and every player linked to him go quiet until snooze_until. */
+export function rowSnoozed(r: any, now = new Date()) {
+  return !!r?.snooze_until && new Date(r.snooze_until).getTime() > now.getTime();
+}
 function level(st: Settings, team: any, r: any, l: any): string {
+  if (rowSnoozed(r)) return "mute"; // beats any per-player or per-link setting until the snooze ends
   if (l && l.notify !== "inherit") return l.notify;
   if (r && r.notify !== "inherit") return r.notify;
   if (team.notify !== "inherit") return team.notify;

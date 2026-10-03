@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.7.2"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.8.0"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -360,13 +360,35 @@ const reEsc = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const trim = (t) => (t.length > 110 ? t.slice(0, 107).replace(/[\s,;:]+$/, "") + "…" : t);
 function rowLineup({ i, r, slot }) {
   const sel = `<select class="slotsel" data-slotrow="${i}" data-rid="${r ? r.id : ""}" aria-label="Lineup slot"${synced(team()) ? " disabled" : ""}>${SLOTS.map(([v, l]) => `<option value="${v}"${v === slot ? " selected" : ""}>${l}</option>`).join("")}</select>`;
-  if (!r) return `<div class="lrow">${sel}<div class="lname"><input type="search" class="gq" data-row="${i}" placeholder="Add player" autocomplete="off" aria-label="Player name"><div class="gres panel" id="gres${i}" hidden></div></div><span class="lst"></span></div>`;
+  if (!r) return `<div class="lrow">${sel}<div class="lname"><input type="search" class="gq" data-row="${i}" placeholder="Add player" autocomplete="off" aria-label="Player name"><div class="gres panel" id="gres${i}" hidden></div></div><span class="lst"></span><span></span></div>`;
   const p = P(r.player_id), st = statusOf(p.id), full = S.statuses.get(p.id);
   const links = S.links.filter((l) => l.roster_id === r.id);
-  return `<div class="lrow">${sel}<div class="lname"><button class="pbtn" data-roster="${r.id}"><span class="name">${esc(p.full_name)}</span> <span class="meta">${esc(p.pos)}, ${esc(p.team || "FA")}</span>
+  const snz = snoozedRow(r), muted = !snz && r.notify === "mute";
+  const quietTag = snz ? `<span class="tag">Snoozed to ${esc(new Date(r.snooze_until).toLocaleDateString([], { weekday: "short" }))}</span>` : muted ? `<span class="tag">Muted</span>` : "";
+  return `<div class="lrow${snz || muted ? " quiet" : ""}">${sel}<div class="lname"><button class="pbtn" data-roster="${r.id}"><span class="name">${esc(p.full_name)}</span> <span class="meta">${esc(p.pos)}, ${esc(p.team || "FA")}</span> ${quietTag}
       ${links.length ? `<span class="lk">${links.map((l) => { const lp = P(l.player_id); return `↳ ${esc(short(lp))} ${statusOf(lp.id) !== "ACT" ? `(${esc(WORD[statusOf(lp.id)])})` : ""}`; }).join(" · ")}</span>` : ""}
       ${rowNote(r, p, full)}</button></div>
-    <span class="lst">${badge(st)}</span></div>`;
+    <span class="lst">${badge(st)}</span>
+    <button class="bell${snz || muted ? " off" : ""}" data-snooze="${r.id}" aria-pressed="${snz || muted}" aria-label="${snz || muted ? `Turn alerts back on for ${esc(p.full_name)}` : `Snooze alerts for ${esc(p.full_name)} and his linked players until Tuesday`}">${snz || muted ? BELL_OFF : BELL}</button></div>`;
+}
+/* ---------------- bell: snooze one player + his linked players until Tuesday ---------------- */
+const BELL = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>`;
+const BELL_OFF = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.7 3A6 6 0 0 1 18 8c0 2.4.4 4.2.9 5.5"/><path d="M17 17H3s3-2 3-9c0-.6.1-1.2.3-1.8"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/><path d="M2 2l20 20"/></svg>`;
+const snoozedRow = (r) => !!r.snooze_until && new Date(r.snooze_until) > new Date();
+function toggleSnooze(id) {
+  const r = S.roster.find((x) => x.id === id); if (!r) return;
+  const p = P(r.player_id), hasLinks = S.links.some((l) => l.roster_id === r.id);
+  if (snoozedRow(r) || r.notify === "mute") {
+    const patch = { snooze_until: null, ...(r.notify === "mute" ? { notify: "inherit" } : {}) };
+    Object.assign(r, patch); render();
+    toast(`Alerts back on for ${short(p)}`);
+    bg(sb.from("roster").update(patch).eq("id", r.id));
+  } else {
+    const until = nextTuesday();
+    r.snooze_until = until.toISOString(); render();
+    toast(`${short(p)}${hasLinks ? " and his linked players" : ""} snoozed until ${until.toLocaleDateString([], { weekday: "long" })}`);
+    bg(sb.from("roster").update({ snooze_until: r.snooze_until }).eq("id", r.id));
+  }
 }
 async function runGridSearch(i, q, slot) {
   const box = $("gres" + i); if (!box) return;
@@ -799,7 +821,8 @@ function playerDlg(rosterId) {
   const links = S.links.filter((l) => l.roster_id === r.id);
   openDlg(`<h3>${esc(p.full_name)}</h3><p class="sub">${esc(p.pos)}, ${esc(p.team || "FA")} · ${badge(st?.status || "ACT", 1)} ${esc(stLabel(st?.status || "ACT"))}</p>
     ${noteBlock(p.id)}
-    <div><div><label class="f" for="pnot">Alerts for him</label>${notifySelect("pnot", r.notify, ["inherit", "all", "impact", "mute"], "Use team setting")}</div></div>
+    <div><div><label class="f" for="pnot">Alerts for him</label>${notifySelect("pnot", r.notify, ["inherit", "all", "impact", "mute"], "Use team setting")}
+      <div class="hint">${snoozedRow(r) ? `Snoozed until ${esc(new Date(r.snooze_until).toLocaleDateString([], { weekday: "long" }))} with the bell on your roster. Tap the bell again to turn alerts back on.` : "Need a short break? The bell on your roster snoozes him and his linked players until Tuesday."}</div></div></div>
     ${r.slot === "bench" && ["Q", "D"].includes(st?.status) ? `<div class="bannerbox" style="margin-top:12px"><span>He's ${esc(stLabel(st.status))} on your bench. Get told who to swap if he's cleared?</span><button class="btn small" data-act="addRule" data-trigger="${esc(p.id)}">Set rule</button></div>`
       : `<div class="actions"><button class="btn ghost small" data-act="addRule" data-trigger="${esc(p.id)}">Add if/then rule</button></div>`}
     <h2>Why you're watching</h2>
@@ -955,6 +978,7 @@ document.addEventListener("click", async (e) => {
   const gp = e.target.closest("[data-gpick]"); if (gp) { pickIntoRow(+gp.dataset.row, { id: gp.dataset.gpick, name: gp.dataset.gname, pos: gp.dataset.gpos, team: gp.dataset.gteam }); return; }
   const sg = e.target.closest("[data-seg]"); if (sg) { saveSetting({ [sg.dataset.seg]: sg.dataset.val }); return; }
   const ul = e.target.closest("[data-unlink]"); if (ul) { S.links = S.links.filter((x) => x.id !== ul.dataset.unlink); render(); playerDlg(ul.dataset.roster); bg(sb.from("links").delete().eq("id", ul.dataset.unlink)); return; }
+  const bell = e.target.closest("[data-snooze]"); if (bell) { toggleSnooze(bell.dataset.snooze); return; }
   const pr = e.target.closest("button[data-roster]:not([data-act])"); if (pr) { playerDlg(pr.dataset.roster); return; }
   const a = e.target.closest("[data-act]"); if (!a) return;
   const t = team();

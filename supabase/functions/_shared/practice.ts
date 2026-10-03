@@ -1,5 +1,5 @@
 // Practice participation from ESPN injury notes, plus the evening practice digest.
-import { benchSnoozed, deliver, loadWatchers, quietHoldUntil, shortName, type Admin, type AlertRow, type Line } from "./core.ts";
+import { benchSnoozed, rowSnoozed, deliver, loadWatchers, quietHoldUntil, shortName, type Admin, type AlertRow, type Line } from "./core.ts";
 
 export type Practice = "DNP" | "LP" | "FP";
 const WORD: Record<Practice, string> = { DNP: "DID NOT PRACTICE", LP: "LIMITED", FP: "FULL" };
@@ -75,7 +75,7 @@ export async function practiceDigest(admin: Admin, now = new Date()) {
     if (exists) continue;
     const lines: Line[] = [];
     for (const t of ctx.teams.filter((x) => x.user_id === uid)) {
-      const troster = ctx.roster.filter((r) => r.team_id === t.id && !(r.slot === "bench" && benchSnoozed(t, now)));
+      const troster = ctx.roster.filter((r) => r.team_id === t.id && !rowSnoozed(r, now) && !(r.slot === "bench" && benchSnoozed(t, now)));
       const seen = new Set<string>();
       for (const r of troster) {
         const p = ctx.players.get(r.player_id);

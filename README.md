@@ -126,6 +126,8 @@ The default alert setting, **Out or cleared**, fires when a player is ruled out 
 
 **Tuesday 8am (each user's time zone):** the weekly waiver report lists Out, Doubtful, IR, and suspended players plus next week's byes, each with a suggested backup (your bench first, then the next man up on his NFL depth chart, then the most-added healthy free agent on Sleeper's trending list). Linked leagues mark each backup available or taken from the league rosters. The report ends with Monday's held updates, one line per player with his latest status. Then the alert history clears.
 
+**Snooze bell:** each roster row has a bell. Tapping it silences that player and every player linked to him (status, news, and practice alerts) until next Tuesday; tapping again turns alerts back on. If/then rules still fire, and the pre-game check and Tuesday report still list him. For a longer break, set *Alerts for him* to Muted in his player screen.
+
 **If/then rules** are set per team (Add rule, or from a player's screen). They fire once, always come through even in quiet hours, and clear themselves on Tuesday. The pre-game check also lists rules still waiting on a Questionable player. The app can't change your ESPN lineup for you; the alert tells you exactly what to swap.
 
 ## League sync (ESPN + Sleeper)
