@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.8.2"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.8.3"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -266,21 +266,27 @@ function render() {
 let report = null;
 function myPlayers() {
   const names = new Map(S.teams.map((t) => [t.id, t.name]));
-  const m = new Map();
-  for (const r of S.roster) {
-    const n = names.get(r.team_id); if (!n) continue;
-    const have = m.get(r.player_id);
-    if (!have) m.set(r.player_id, n); else if (!have.split(", ").includes(n)) m.set(r.player_id, have + ", " + n);
+  const add = (m, id, label) => { const have = m.get(id); if (!have) m.set(id, label); else if (!have.split(" / ").includes(label)) m.set(id, have + " / " + label); };
+  const mine = new Map(), linked = new Map();
+  for (const r of S.roster) { const n = names.get(r.team_id); if (n) add(mine, r.player_id, n); }
+  // linked players: "Burrow's QB · Main League" (a receiver's QB, a back's handcuff, or a custom link)
+  const KIND = { qb: "QB", handcuff: "backup" };
+  for (const l of S.links) {
+    const r = S.roster.find((x) => x.id === l.roster_id), n = names.get(l.team_id);
+    if (!r || !n || mine.has(l.player_id)) continue;
+    const who = (P(r.player_id).full_name || "").split(" ").slice(-1)[0];
+    add(linked, l.player_id, `${KIND[l.kind] ? `${who}'s ${KIND[l.kind]}` : `linked to ${who}`} · ${n}`);
   }
-  return m;
+  return { mine, linked };
 }
 function viewReport(v) {
   if (!window.InjuryReport) { v.innerHTML = `<p class="sub">The injury report didn't load. Close and reopen the app to try again.</p>`; return; }
   if (!report) report = InjuryReport.create({ urlState: false });
-  report.setMine(myPlayers());
+  const { mine, linked } = myPlayers();
+  report.setMine(mine, linked);
   // keep the report's node; only rebuild the header around it
   if (!v.querySelector(".irep")) {
-    v.innerHTML = `<h2>NFL injury report</h2><p class="sub">Every QB, RB, WR, TE and K who is questionable, doubtful, out, on IR or suspended. Your players are tagged <b>YOURS</b>.</p><div id="repMount"></div>
+    v.innerHTML = `<h2>NFL injury report</h2><p class="sub">Every QB, RB, WR, TE and K who is questionable, doubtful, out, on IR or suspended. Your players are tagged <b>YOURS</b>, and the players they depend on <b>LINKED</b>.</p><div id="repMount"></div>
       <p class="reportlinks sub"><a href="injuries.html#howTitle" target="_blank" rel="noopener">How to read the report</a> (designations and practice codes)</p>`;
   }
   report.attach($("repMount"));

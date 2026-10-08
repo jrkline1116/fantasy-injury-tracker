@@ -220,7 +220,8 @@ button,select,input,a{touch-action:manipulation;-webkit-tap-highlight-color:tran
 .irep .controls input,.irep .controls select{width:100%;padding:9px 10px;border:1.5px solid var(--line);border-radius:8px;background:var(--surface)}
 .irep .controls .full{grid-column:1/-1}
 @media (min-width:700px){.wide .irep .controls{grid-template-columns:2fr 1.3fr 1fr 1fr}.wide .irep .controls .full{grid-column:auto}}
-.irep .sortbar{display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:none;align-items:center}
+.irep .sortbar{display:flex;gap:8px 14px;flex-wrap:wrap;padding:2px 0 10px;align-items:center}
+.irep .chipgrp{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .irep .sortbar::-webkit-scrollbar{display:none}
 .irep .sortbar .lbl{font-size:.8rem;color:var(--muted);flex:none;margin-right:2px}
 .irep .sortbar button{flex:none;border:1.5px solid var(--line);background:transparent;border-radius:999px;padding:4px 12px;font-weight:600;font-size:.88rem;white-space:nowrap}
@@ -249,8 +250,9 @@ button,select,input,a{touch-action:manipulation;-webkit-tap-highlight-color:tran
 .irep .yourtag{color:var(--ink);background:var(--surface2)}
 .irep .pr.mine{box-shadow:inset 4px 0 0 var(--ink)}
 .irep .myteams{font-weight:600;color:var(--ink)}
+.irep .pr.linked{box-shadow:inset 4px 0 0 var(--muted)}
+.irep .linktag{color:var(--muted);border-style:dashed}
 .irep .pr .when span{font-size:.9em}
-.irep .sortbar .minechip{margin-right:6px}
 .irep .sortbar .minechip[aria-pressed="true"]{background:var(--brand);border-color:var(--brand);color:var(--brand-ink)}
 .irep .empty{padding:22px 14px}
 .irep .list{margin-bottom:4px}

@@ -6,7 +6,8 @@
 
    Usage: const r = InjuryReport.create({ urlState: true })      -> r.el is the report's DOM node
           r.attach(parentEl)   put it on screen (reuses the same node, so filters and sort survive tab switches)
-          r.setMine(map)       Map of player id -> "Team A, Team B" for the signed-in user's rostered players */
+          r.setMine(mine, linked)  Maps of player id -> label: the signed-in user's rostered players ("Main League")
+                                   and their linked players ("Burrow's QB · Main League") */
 (() => {
   "use strict";
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -24,7 +25,8 @@
   const STATUS = { Q: "Questionable", D: "Doubtful", O: "Out", IR: "Injured reserve", SUS: "Suspended" };
   const SEV = { Q: 1, D: 2, O: 3, IR: 4, SUS: 5 };
   const POS = { QB: 1, RB: 2, WR: 3, TE: 4, K: 5 };
-  const DIR = { team: 1, name: 1, status: -1, pos: 1, since: -1, game: 1 }; // first-click direction per sort
+  // Default order is by team (grouped). The two sort chips switch to newest change first / soonest game first.
+  const DIR = { team: 1, since: -1, game: 1 };
   const PRAC = { DNP: "did not practice", LP: "limited", FP: "full" };
 
   const lastName = (n) => { const parts = String(n).replace(/\s+(Jr\.?|Sr\.?|II|III|IV|V)$/i, "").trim().split(/\s+/); return parts[parts.length - 1] + " " + n; };
@@ -51,7 +53,7 @@
     const CFG = window.FIT_CONFIG || {};
     const urlState = !!opts.urlState;
     const S = { players: [], prev: null, fresh: new Set(), fetchedAt: 0, lastChange: null, err: false, loading: false,
-      mine: null, onlyMine: false, q: "", team: "", pos: "", status: "", sort: "team", dir: 1 };
+      mine: null, linked: null, onlyMine: false, onlyLinked: false, q: "", team: "", pos: "", status: "", sort: "team", dir: 1 };
 
     const el = document.createElement("div");
     el.className = "irep";
@@ -62,14 +64,12 @@
         <input class="full" data-f="q" type="search" placeholder="Search a player" aria-label="Search a player" autocomplete="off">
         <select data-f="team" aria-label="Team"><option value="">All teams</option></select>
         <select data-f="pos" aria-label="Position"><option value="">All positions</option><option>QB</option><option>RB</option><option>WR</option><option>TE</option><option>K</option></select>
-        <select data-f="status" aria-label="Designation"><option value="">All designations</option><option value="GAME">Game-time (Q / D / O)</option>
+        <select data-f="status" aria-label="Status"><option value="">All statuses</option><option value="GAME">Game-time (Q / D / O)</option>
           <option value="Q">Questionable</option><option value="D">Doubtful</option><option value="O">Out</option><option value="IR">Injured reserve</option><option value="SUS">Suspended</option></select>
       </div>
-      <div class="sortbar" role="group" aria-label="Sort by">
-        <button class="minechip" data-mine hidden aria-pressed="false">My players</button>
-        <span class="lbl">Sort</span>
-        <button data-sort="team">Team</button><button data-sort="name">Player</button><button data-sort="status">Status</button>
-        <button data-sort="pos">Position</button><button data-sort="since">Latest change</button><button data-sort="game">Next game</button>
+      <div class="sortbar">
+        <span class="chipgrp minegrp" role="group" aria-label="Show only" hidden><button class="minechip" data-mine="mine" aria-pressed="false">My players</button><button class="minechip" data-mine="linked" aria-pressed="false">My linked players</button></span>
+        <span class="chipgrp" role="group" aria-label="Sort by"><span class="lbl">Sort</span><button data-sort="since">Latest change</button><button data-sort="game">Next game</button></span>
       </div>
       <div class="panel list" aria-live="polite"><div class="empty">Loading…</div></div>
       <p class="hint shown"></p>`;
@@ -82,17 +82,16 @@
       if (urlState) p = new URLSearchParams(location.search);
       else { try { p = new URLSearchParams(localStorage.getItem("fit-report") || ""); } catch { p = new URLSearchParams(); } }
       S.q = p.get("q") || ""; S.team = (p.get("team") || "").toUpperCase(); S.pos = (p.get("pos") || "").toUpperCase();
-      S.status = (p.get("status") || "").toUpperCase(); S.onlyMine = p.get("mine") === "1";
+      S.status = (p.get("status") || "").toUpperCase(); S.onlyMine = p.get("mine") === "1"; S.onlyLinked = p.get("linked") === "1";
       S.sort = DIR[p.get("sort")] ? p.get("sort") : "team";
-      S.dir = p.get("dir") === "desc" ? -1 : p.get("dir") === "asc" ? 1 : DIR[S.sort];
+      S.dir = DIR[S.sort];
       f("q").value = S.q; f("pos").value = S.pos; f("status").value = S.status;
     }
     function save() {
       const p = new URLSearchParams();
       if (S.q) p.set("q", S.q); if (S.team) p.set("team", S.team); if (S.pos) p.set("pos", S.pos);
-      if (S.status) p.set("status", S.status); if (S.onlyMine) p.set("mine", "1");
+      if (S.status) p.set("status", S.status); if (S.onlyMine) p.set("mine", "1"); if (S.onlyLinked) p.set("linked", "1");
       if (S.sort !== "team") p.set("sort", S.sort);
-      if (S.dir !== DIR[S.sort]) p.set("dir", S.dir === 1 ? "asc" : "desc");
       const qs = p.toString();
       if (urlState) history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash);
       else { try { localStorage.setItem("fit-report", qs); } catch { /* ignore */ } }
@@ -127,18 +126,30 @@
     }
 
     /* ---------- filter + sort ---------- */
+    // "My players" / "My linked players": either or both; a player passes if he's in any chip that's on
+    function mineOk(p) {
+      const want = [];
+      if (S.onlyMine && S.mine) want.push(S.mine);
+      if (S.onlyLinked && S.linked) want.push(S.linked);
+      return !want.length || want.some((m) => m.has(p.id));
+    }
+    // Practice chips: only the current practice week, Wed → Thu → Fri order.
+    // (The database already limits this to practices since the team's last game; this is a backstop.)
+    function thisWeek(days) {
+      if (!Array.isArray(days) || !days.length) return [];
+      const sorted = [...days].sort((a, b) => String(a.d).localeCompare(String(b.d)));
+      const newest = new Date(sorted[sorted.length - 1].d + "T12:00:00Z");
+      return sorted.filter((d) => (newest - new Date(d.d + "T12:00:00Z")) / 86400e3 <= 3);
+    }
     function visible() {
       const term = S.q.trim().toLowerCase();
       const list = S.players.filter((p) =>
         (!term || p.name.toLowerCase().includes(term)) &&
         (!S.team || p.team === S.team) && (!S.pos || p.pos === S.pos) &&
         (!S.status || (S.status === "GAME" ? ["Q", "D", "O"].includes(p.status) : p.status === S.status)) &&
-        (!S.onlyMine || !S.mine || S.mine.has(p.id)));
+        mineOk(p));
       const by = {
         team: (a, b) => (TEAMS[a.team] || a.team).localeCompare(TEAMS[b.team] || b.team),
-        name: (a, b) => lastName(a.name).localeCompare(lastName(b.name)),
-        status: (a, b) => (SEV[a.status] || 9) - (SEV[b.status] || 9),
-        pos: (a, b) => (POS[a.pos] || 9) - (POS[b.pos] || 9),
         since: (a, b) => new Date(a.since) - new Date(b.since),
         game: (a, b) => new Date(a.kickoff) - new Date(b.kickoff),
       };
@@ -161,26 +172,23 @@
     }
     function row(p) {
       const fresh = S.fresh.has(p.id);
-      const mine = S.mine?.get(p.id);
-      const prac = Array.isArray(p.practice) && p.practice.length
-        ? `<span class="pc" title="Practice this week">${p.practice.map((d) => `<span class="${esc(d.p)}" title="${esc(dayName(d.d))}: ${esc(PRAC[d.p] || d.p)}">${esc(dayLetter(d.d))} ${esc(d.p)}</span>`).join("")}</span>` : "";
+      const mine = S.mine?.get(p.id), link = S.linked?.get(p.id);
+      const week = thisWeek(p.practice);
+      const prac = week.length
+        ? `<span class="pc" title="Practice this week">${week.map((d) => `<span class="${esc(d.p)}" title="${esc(dayName(d.d))}: ${esc(PRAC[d.p] || d.p)}">${esc(dayLetter(d.d))} ${esc(d.p)}</span>`).join("")}</span>` : "";
       const from = p.from && p.from !== p.status ? `from ${p.from === "ACT" ? "active" : esc(p.from)}` : "";
-      return `<div class="pr${fresh ? " fresh" : ""}${mine ? " mine" : ""}">
+      return `<div class="pr${fresh ? " fresh" : ""}${mine ? " mine" : link ? " linked" : ""}">
         <span class="st ${esc(p.status)}" title="${esc(STATUS[p.status] || p.status)}">${esc(p.status)}</span>
-        <div class="nm">${esc(p.name)}<small>${esc(p.pos)} · ${esc(p.team)}</small>${fresh ? `<span class="tag newtag">NEW</span>` : ""}${mine ? `<span class="tag yourtag" title="On your team: ${esc(mine)}">YOURS</span>` : ""}</div>
+        <div class="nm">${esc(p.name)}<small>${esc(p.pos)} · ${esc(p.team)}</small>${fresh ? `<span class="tag newtag">NEW</span>` : ""}${mine ? `<span class="tag yourtag" title="On your team: ${esc(mine)}">YOURS</span>` : link ? `<span class="tag linktag" title="${esc(link)}">LINKED</span>` : ""}</div>
         <div class="when" title="${esc(new Date(p.since).toLocaleString())}">${esc(ago(p.since))}${from ? `<br><span>${from}</span>` : ""}</div>
-        <div class="meta">${prac}<span>${esc(gameText(p))}</span>${mine ? `<span class="myteams">${esc(mine)}</span>` : ""}</div>
+        <div class="meta">${prac}<span>${esc(gameText(p))}</span>${mine ? `<span class="myteams">${esc(mine)}</span>` : link ? `<span class="myteams">${esc(link)}</span>` : ""}</div>
       </div>`;
     }
     function render() {
-      const mineBtn = q("[data-mine]");
-      mineBtn.hidden = !S.mine;
-      mineBtn.setAttribute("aria-pressed", !!(S.mine && S.onlyMine));
-      for (const b of el.querySelectorAll("button[data-sort]")) {
-        const on = b.dataset.sort === S.sort;
-        b.setAttribute("aria-pressed", on);
-        b.innerHTML = esc(b.textContent.replace(/[↑↓]/g, "").trim()) + (on ? `<span class="ar">${S.dir === 1 ? "↑" : "↓"}</span>` : "");
-      }
+      q(".minegrp").hidden = !S.mine;
+      q('[data-mine="mine"]').setAttribute("aria-pressed", !!(S.mine && S.onlyMine));
+      q('[data-mine="linked"]').setAttribute("aria-pressed", !!(S.linked && S.onlyLinked));
+      for (const b of el.querySelectorAll("button[data-sort]")) b.setAttribute("aria-pressed", b.dataset.sort === S.sort);
       const c = {}; for (const p of S.players) c[p.status] = (c[p.status] || 0) + 1;
       q(".counts").innerHTML = Object.keys(STATUS).filter((k) => c[k]).map((k) =>
         `<span class="count"><span class="st ${k} sm">${k}</span>${c[k]} ${esc(STATUS[k].toLowerCase())}</span>`).join("");
@@ -190,19 +198,20 @@
       if (!S.fetchedAt) return;
       if (!list.length) {
         const msg = !S.players.length ? "No fantasy players are on the injury report right now."
-          : S.onlyMine && S.mine ? (S.mine.size ? "None of your players are on the injury report. Nice." : "Add players to a team and they'll show up here when they're hurt.")
+          : (S.onlyMine || S.onlyLinked) && S.mine && !S.q && !S.team && !S.pos && !S.status
+            ? ((S.onlyMine && S.mine.size) || (S.onlyLinked && S.linked?.size) ? "None of your players are on the injury report right now. Nice." : "Add players to a team and they'll show up here when they're hurt.")
           : "No players match those filters.";
         q(".list").innerHTML = `<div class="empty">${msg}</div>`;
         return;
       }
       let html = "", group = null;
-      const key = (x) => (S.sort === "team" ? x.team : S.sort === "status" ? x.status : null);
+      const key = (x) => (S.sort === "team" ? x.team : null);
       for (const p of list) {
         const g = key(p);
         if (g !== null && g !== group) {
           group = g;
           const n = list.filter((x) => key(x) === g).length;
-          html += `<div class="grp">${esc(S.sort === "team" ? (TEAMS[g] || g) : (STATUS[g] || g))}<small>${n} player${n === 1 ? "" : "s"}</small></div>`;
+          html += `<div class="grp">${esc(TEAMS[g] || g)}<small>${n} player${n === 1 ? "" : "s"}</small></div>`;
         }
         html += row(p);
       }
@@ -229,10 +238,11 @@
     f("q").addEventListener("keydown", (e) => { if (e.key === "Enter") f("q").blur(); });
     for (const k of ["team", "pos", "status"]) f(k).addEventListener("change", () => { S[k] = f(k).value; save(); render(); f(k).blur(); });
     el.addEventListener("click", (e) => {
-      if (e.target.closest("[data-mine]")) { S.onlyMine = !S.onlyMine; save(); render(); return; }
+      const m = e.target.closest("[data-mine]");
+      if (m) { if (m.dataset.mine === "linked") S.onlyLinked = !S.onlyLinked; else S.onlyMine = !S.onlyMine; save(); render(); return; }
       const b = e.target.closest("button[data-sort]"); if (!b) return;
-      const k = b.dataset.sort;
-      if (S.sort === k) S.dir = -S.dir; else { S.sort = k; S.dir = DIR[k]; }
+      // tap a sort chip to turn it on, tap it again to go back to the default team order
+      S.sort = S.sort === b.dataset.sort ? "team" : b.dataset.sort; S.dir = DIR[S.sort];
       save(); render();
     });
 
@@ -245,10 +255,10 @@
         if (el.parentNode !== parent) parent.appendChild(el);
         if (!S.fetchedAt || Date.now() - S.fetchedAt > REFRESH_MS) load(); else renderLive();
       },
-      setMine(map) {
-        const same = S.mine && map && S.mine.size === map.size && [...map].every(([k, v]) => S.mine.get(k) === v);
-        if (same) return;
-        S.mine = map; if (S.fetchedAt) render(); else q("[data-mine]").hidden = !S.mine;
+      setMine(mine, linked) {
+        const eq = (a, b) => a && b && a.size === b.size && [...b].every(([k, v]) => a.get(k) === v);
+        if (eq(S.mine, mine) && eq(S.linked, linked)) return;
+        S.mine = mine; S.linked = linked || new Map(); render();
       },
       refresh: load,
     };
