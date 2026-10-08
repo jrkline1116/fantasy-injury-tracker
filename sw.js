@@ -1,7 +1,7 @@
 // Bump VERSION on every release so phones pick up the new files.
-const VERSION = "2.8.1";
+const VERSION = "2.8.2";
 const CACHE = "fit-" + VERSION;
-const SHELL = ["./", "./index.html", "./app.css", "./app.js", "./config.js", "./manifest.json",
+const SHELL = ["./", "./index.html", "./app.css", "./app.js", "./injuries.js", "./config.js", "./manifest.json",
   "./icons/icon-96.png", "./icons/badge-96.png", "./icons/icon-192.png", "./icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {

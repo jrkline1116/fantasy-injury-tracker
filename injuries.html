@@ -32,41 +32,6 @@
   .topnav a[aria-current]{color:var(--ink);text-decoration:underline;text-underline-offset:4px}
   .ir-head h2{font-size:2rem;margin:18px 0 6px}
   .ir-head p{margin:0 0 10px;max-width:42em}
-  .live{display:flex;align-items:center;gap:8px;font-size:.85rem;color:var(--muted);margin:6px 0 12px;flex-wrap:wrap}
-  .dot{width:9px;height:9px;border-radius:50%;background:var(--act);flex:none}
-  .dot.stale{background:var(--q)}
-  .dot.err{background:var(--out)}
-  .counts{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}
-  .count{display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:5px 9px 5px 6px;font-size:.85rem;font-weight:600}
-  .controls{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
-  .controls input,.controls select{width:100%;padding:9px 10px;border:1.5px solid var(--line);border-radius:8px;background:var(--surface)}
-  .controls .full{grid-column:1/-1}
-  @media (min-width:700px){.controls{grid-template-columns:2fr 1.3fr 1fr 1fr}.controls .full{grid-column:auto}}
-  .sortbar{display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:none;align-items:center}
-  .sortbar::-webkit-scrollbar{display:none}
-  .sortbar .lbl{font-size:.8rem;color:var(--muted);flex:none;margin-right:2px}
-  .sortbar button{flex:none;border:1.5px solid var(--line);background:transparent;border-radius:999px;padding:4px 12px;font-weight:600;font-size:.88rem;white-space:nowrap}
-  .sortbar button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
-  .sortbar button .ar{display:inline-block;margin-left:4px;font-size:.75em}
-  .list .grp{padding:8px 14px;background:var(--surface2);border-top:1px solid var(--line);font:700 1rem/1.1 var(--cond);letter-spacing:.03em;display:flex;justify-content:space-between;align-items:baseline}
-  .list .grp:first-child{border-top:0;border-radius:10px 10px 0 0}
-  .list .grp small{font:500 .78rem var(--body);color:var(--muted);letter-spacing:0}
-  .pr{display:grid;grid-template-columns:auto 1fr auto;gap:2px 12px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
-  .list > .pr:first-child{border-top:0}
-  .pr .nm{font-weight:600;line-height:1.2}
-  .pr .nm small{font-weight:500;color:var(--muted);margin-left:4px}
-  .pr .meta{grid-column:2/4;font-size:.82rem;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}
-  .pr .when{font-size:.78rem;color:var(--muted);text-align:right;white-space:nowrap}
-  .pr .st{grid-row:1/3}
-  .pc{display:inline-flex;gap:3px}
-  .pc span{font-size:.7rem;font-weight:700;border:1.5px solid var(--line);border-radius:4px;padding:1px 4px;letter-spacing:.02em}
-  .pc .DNP{border-color:var(--out);color:var(--out)}
-  .pc .LP{border-color:var(--q);color:var(--q)}
-  .pc .FP{border-color:var(--act);color:var(--act)}
-  .pr.fresh{animation:fresh 4s ease-out}
-  @keyframes fresh{0%{background:color-mix(in srgb,var(--q) 28%,transparent)}100%{background:transparent}}
-  .newtag{font-size:.65rem;font-weight:700;letter-spacing:.06em;color:var(--brand);border:1.5px solid var(--brand);border-radius:4px;padding:0 4px;margin-left:6px;vertical-align:1px}
-  .empty{padding:22px 14px;text-align:center;color:var(--muted)}
   .legend{display:grid;gap:8px}
   .legend dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:start}
   .legend dt{padding-top:2px}
@@ -94,38 +59,10 @@
   <section class="ir-head">
     <h2>NFL Injury Report</h2>
     <p>Every fantasy-relevant player (QB, RB, WR, TE, K) currently listed as questionable, doubtful, out, on injured reserve or suspended, with this week's practice participation and his team's next game. Sort by team, player, position or status, and filter to the guys you care about.</p>
-    <div class="live" id="live"><span class="dot" id="dot"></span><span id="liveText">Loading the latest report…</span></div>
   </section>
 
-  <div class="counts" id="counts" aria-label="Players by designation"></div>
-
-  <div class="controls" role="search">
-    <input id="q" class="full" type="search" placeholder="Search a player" aria-label="Search a player" autocomplete="off">
-    <select id="team" aria-label="Team"><option value="">All teams</option></select>
-    <select id="pos" aria-label="Position">
-      <option value="">All positions</option><option>QB</option><option>RB</option><option>WR</option><option>TE</option><option>K</option>
-    </select>
-    <select id="status" aria-label="Designation">
-      <option value="">All designations</option>
-      <option value="GAME">Game-time (Q / D / O)</option>
-      <option value="Q">Questionable</option><option value="D">Doubtful</option><option value="O">Out</option>
-      <option value="IR">Injured reserve</option><option value="SUS">Suspended</option>
-    </select>
-  </div>
-
-  <div class="sortbar" id="sortbar" role="group" aria-label="Sort by">
-    <span class="lbl">Sort</span>
-    <button data-sort="team">Team</button>
-    <button data-sort="name">Player</button>
-    <button data-sort="status">Status</button>
-    <button data-sort="pos">Position</button>
-    <button data-sort="since">Latest change</button>
-    <button data-sort="game">Next game</button>
-  </div>
-
-  <div class="panel list" id="list" aria-live="polite"><div class="empty">Loading…</div></div>
+  <div id="report"></div>
   <noscript><p class="sub" style="margin-top:10px">The live report needs JavaScript turned on. The guide below explains every designation.</p></noscript>
-  <p class="hint" id="shown"></p>
 
   <div class="ctabox">
     <h3>Want this for just your team?</h3>
@@ -170,5 +107,25 @@
 
 <script src="config.js"></script>
 <script src="injuries.js"></script>
+<script>
+  InjuryReport.create({ urlState: true }).attach(document.getElementById("report"));
+  // One ad, created once and never re-rendered. Never in the Google Play app.
+  (function () {
+    var CFG = window.FIT_CONFIG || {}, play = false;
+    try {
+      if (document.referrer.indexOf("android-app://") === 0) sessionStorage.setItem("fit-play", "1");
+      play = sessionStorage.getItem("fit-play") === "1";
+    } catch (e) { /* ignore */ }
+    if (!CFG.ADSENSE_CLIENT || !CFG.ADSENSE_SLOT || play) return;
+    var box = document.getElementById("adbox");
+    box.innerHTML = '<div class="adlabel">Advertisement</div><ins class="adsbygoogle" style="display:block" data-ad-client="' + CFG.ADSENSE_CLIENT + '" data-ad-slot="' + CFG.ADSENSE_SLOT + '" data-ad-format="auto" data-full-width-responsive="true"></ins>';
+    box.hidden = false;
+    var js = document.createElement("script");
+    js.async = true; js.crossOrigin = "anonymous";
+    js.src = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=" + encodeURIComponent(CFG.ADSENSE_CLIENT);
+    document.head.appendChild(js);
+    try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch (e) { /* ad blocker */ }
+  })();
+</script>
 </body>
 </html>

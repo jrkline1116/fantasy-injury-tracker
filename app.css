@@ -208,3 +208,50 @@ button,select,input,a{touch-action:manipulation;-webkit-tap-highlight-color:tran
 .bell:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
 .bell.off{color:var(--ink)}
 .lrow.quiet .pbtn .name,.lrow.quiet .lst{opacity:.55}
+
+/* 2.8.2: NFL injury report (injuries.html and the in-app Injuries tab), see injuries.js */
+.irep .live{display:flex;align-items:flex-start;gap:8px;font-size:.85rem;color:var(--muted);margin:6px 0 12px;}
+.irep .dot{width:9px;height:9px;border-radius:50%;background:var(--act);flex:none;margin-top:.35em}
+.irep .dot.stale{background:var(--q)}
+.irep .dot.err{background:var(--out)}
+.irep .counts{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 12px}
+.irep .count{display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:5px 9px 5px 6px;font-size:.85rem;font-weight:600}
+.irep .controls{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px}
+.irep .controls input,.irep .controls select{width:100%;padding:9px 10px;border:1.5px solid var(--line);border-radius:8px;background:var(--surface)}
+.irep .controls .full{grid-column:1/-1}
+@media (min-width:700px){.wide .irep .controls{grid-template-columns:2fr 1.3fr 1fr 1fr}.wide .irep .controls .full{grid-column:auto}}
+.irep .sortbar{display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:none;align-items:center}
+.irep .sortbar::-webkit-scrollbar{display:none}
+.irep .sortbar .lbl{font-size:.8rem;color:var(--muted);flex:none;margin-right:2px}
+.irep .sortbar button{flex:none;border:1.5px solid var(--line);background:transparent;border-radius:999px;padding:4px 12px;font-weight:600;font-size:.88rem;white-space:nowrap}
+.irep .sortbar button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.irep .sortbar button .ar{display:inline-block;margin-left:4px;font-size:.75em}
+.irep .list .grp{padding:8px 14px;background:var(--surface2);border-top:1px solid var(--line);font:700 1rem/1.1 var(--cond);letter-spacing:.03em;display:flex;justify-content:space-between;align-items:baseline}
+.irep .list .grp:first-child{border-top:0;border-radius:10px 10px 0 0}
+.irep .list .grp small{font:500 .78rem var(--body);color:var(--muted);letter-spacing:0}
+.irep .pr{display:grid;grid-template-columns:auto 1fr auto;gap:2px 12px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
+.irep .list > .pr:first-child{border-top:0}
+.irep .pr .nm{font-weight:600;line-height:1.2}
+.irep .pr .nm small{font-weight:500;color:var(--muted);margin-left:4px}
+.irep .pr .meta{grid-column:2/4;font-size:.82rem;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}
+.irep .pr .when{font-size:.78rem;color:var(--muted);text-align:right;white-space:nowrap}
+.irep .pr .st{grid-row:1/3}
+.irep .pc{display:inline-flex;gap:3px}
+.irep .pc span{font-size:.7rem;font-weight:700;border:1.5px solid var(--line);border-radius:4px;padding:1px 4px;letter-spacing:.02em}
+.irep .pc .DNP{border-color:var(--out);color:var(--out)}
+.irep .pc .LP{border-color:var(--q);color:var(--q)}
+.irep .pc .FP{border-color:var(--act);color:var(--act)}
+.irep .pr.fresh{animation:fresh 4s ease-out}
+@keyframes fresh{0%{background:color-mix(in srgb,var(--q) 28%,transparent)}100%{background:transparent}}
+.irep .tag{font-size:.65rem;font-weight:700;letter-spacing:.06em;border:1.5px solid;border-radius:4px;padding:0 4px;margin-left:6px;vertical-align:1px}
+.irep .empty{padding:22px 14px;text-align:center;color:var(--muted)}
+.irep .newtag{color:var(--brand)}
+.irep .yourtag{color:var(--ink);background:var(--surface2)}
+.irep .pr.mine{box-shadow:inset 4px 0 0 var(--ink)}
+.irep .myteams{font-weight:600;color:var(--ink)}
+.irep .pr .when span{font-size:.9em}
+.irep .sortbar .minechip{margin-right:6px}
+.irep .sortbar .minechip[aria-pressed="true"]{background:var(--brand);border-color:var(--brand);color:var(--brand-ink)}
+.irep .empty{padding:22px 14px}
+.irep .list{margin-bottom:4px}
+.reportlinks{font-size:.85rem;margin:14px 0 0}

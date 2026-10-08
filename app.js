@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.8.1"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.8.2"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -58,7 +58,7 @@ function readHash() {
   }
   if (m) { S.pendingJoin = m[1]; history.replaceState(null, "", location.pathname + "#teams"); S.view = "teams"; }
   else if (y) { S.pendingYahoo = { err: y[2] ? decodeURIComponent(y[2]) : "" }; history.replaceState(null, "", location.pathname + "#teams"); S.view = "teams"; }
-  else S.view = ["teams", "alerts", "settings"].includes(h) ? h : "teams";
+  else S.view = ["teams", "alerts", "report", "settings"].includes(h) ? h : "teams";
 }
 readHash();
 window.addEventListener("hashchange", () => { readHash(); if (S.loaded) { render(); if (S.pendingJoin) joinDlg(); else if (S.pendingYahoo) yahooReturn(); else if (S.pendingEspn) espnFromBookmark(); } });
@@ -254,8 +254,36 @@ function render() {
   });
   renderBanner();
   const v = $("view");
-  v.innerHTML = S.view === "alerts" ? viewAlerts() : S.view === "settings" ? viewSettings() : viewTeams();
+  if (S.view === "report") viewReport(v);
+  else v.innerHTML = S.view === "alerts" ? viewAlerts() : S.view === "settings" ? viewSettings() : viewTeams();
   updateAds();
+}
+
+/* ---------------- Injuries tab (2.8.2) ----------------
+   The full NFL injury report (injuries.js, same as the public injuries.html page), with the user's own
+   players tagged YOURS and a "My players" filter. Built once and re-attached, so the app's 60-second
+   refresh and tab switches don't reset the search, filters or sort. The report refreshes itself every 2 minutes. */
+let report = null;
+function myPlayers() {
+  const names = new Map(S.teams.map((t) => [t.id, t.name]));
+  const m = new Map();
+  for (const r of S.roster) {
+    const n = names.get(r.team_id); if (!n) continue;
+    const have = m.get(r.player_id);
+    if (!have) m.set(r.player_id, n); else if (!have.split(", ").includes(n)) m.set(r.player_id, have + ", " + n);
+  }
+  return m;
+}
+function viewReport(v) {
+  if (!window.InjuryReport) { v.innerHTML = `<p class="sub">The injury report didn't load. Close and reopen the app to try again.</p>`; return; }
+  if (!report) report = InjuryReport.create({ urlState: false });
+  report.setMine(myPlayers());
+  // keep the report's node; only rebuild the header around it
+  if (!v.querySelector(".irep")) {
+    v.innerHTML = `<h2>NFL injury report</h2><p class="sub">Every QB, RB, WR, TE and K who is questionable, doubtful, out, on IR or suspended. Your players are tagged <b>YOURS</b>.</p><div id="repMount"></div>
+      <p class="reportlinks sub"><a href="injuries.html#howTitle" target="_blank" rel="noopener">How to read the report</a> (designations and practice codes)</p>`;
+  }
+  report.attach($("repMount"));
 }
 
 /* ---------------- ads (website only) ----------------
