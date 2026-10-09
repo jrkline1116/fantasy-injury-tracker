@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.8.3"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.9.0"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -281,12 +281,12 @@ function myPlayers() {
 }
 function viewReport(v) {
   if (!window.InjuryReport) { v.innerHTML = `<p class="sub">The injury report didn't load. Close and reopen the app to try again.</p>`; return; }
-  if (!report) report = InjuryReport.create({ urlState: false });
+  if (!report) report = InjuryReport.create({ urlState: false, loadNews: (playerId) => api("playerNews", { playerId }) });
   const { mine, linked } = myPlayers();
   report.setMine(mine, linked);
   // keep the report's node; only rebuild the header around it
   if (!v.querySelector(".irep")) {
-    v.innerHTML = `<h2>NFL injury report</h2><p class="sub">Every QB, RB, WR, TE and K who is questionable, doubtful, out, on IR or suspended. Your players are tagged <b>YOURS</b>, and the players they depend on <b>LINKED</b>.</p><div id="repMount"></div>
+    v.innerHTML = `<h2>NFL injury report</h2><p class="sub">Every QB, RB, WR, TE and K who is questionable, doubtful, out, on IR or suspended. Your players are tagged <b>YOURS</b>, and the players they depend on <b>LINKED</b>. Tap anyone for the latest news.</p><div id="repMount"></div>
       <p class="reportlinks sub"><a href="injuries.html#howTitle" target="_blank" rel="noopener">How to read the report</a> (designations and practice codes)</p>`;
   }
   report.attach($("repMount"));

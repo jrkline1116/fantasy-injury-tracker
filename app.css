@@ -257,3 +257,30 @@ button,select,input,a{touch-action:manipulation;-webkit-tap-highlight-color:tran
 .irep .empty{padding:22px 14px}
 .irep .list{margin-bottom:4px}
 .reportlinks{font-size:.85rem;margin:14px 0 0}
+
+/* 2.9.0: tap a player on the injury report for details */
+.irep .pr[data-pid]{cursor:pointer}
+.irep .pr[data-pid]:hover{background:var(--surface2)}
+.irep .inj{font-weight:600;color:var(--ink)}
+.irdlg .dhead{display:flex;gap:12px;align-items:flex-start}
+.irdlg .dhead > div{flex:1;min-width:0}
+.irdlg .dhead h3{margin:0;padding:0}
+.irdlg .dhead .sub{margin:2px 0 0}
+.irdlg .dhead .st{margin-top:2px}
+.irdlg .close{background:none;border:0;font-size:1.4rem;line-height:1;color:var(--muted);padding:2px 6px}
+.irdlg .dline{margin:10px 0 0;font-size:.95rem}
+.irdlg .dline + .dline{margin-top:4px}
+.irdlg .muted{color:var(--muted)}
+.irdlg h4{font:700 1.05rem/1.1 var(--cond);letter-spacing:.03em;margin:18px 0 8px;padding-top:12px;border-top:1px solid var(--line)}
+.irdlg .dlist{list-style:none;margin:0;padding:0;display:grid;gap:5px;font-size:.92rem}
+.irdlg .pc span{font-size:.7rem;font-weight:700;border:1.5px solid var(--line);border-radius:4px;padding:1px 4px}
+.irdlg .pc .DNP{border-color:var(--out);color:var(--out)}
+.irdlg .pc .LP{border-color:var(--q);color:var(--q)}
+.irdlg .pc .FP{border-color:var(--act);color:var(--act)}
+.irdlg .news{padding:0 0 10px;margin:0 0 10px;border-bottom:1px dashed var(--line)}
+.irdlg .news:last-of-type{border-bottom:0}
+.irdlg .nmeta{font-size:.76rem;color:var(--muted);margin-bottom:2px}
+.irdlg .nhead{margin:0;font-weight:600;font-size:.95rem}
+.irdlg .nstory{margin:4px 0 0;font-size:.88rem;color:var(--muted)}
+.irdlg .dnote{background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:.9rem}
+.irdlg .dlinks{margin:18px 0 0;padding-top:12px;border-top:1px solid var(--line);font-size:.88rem}

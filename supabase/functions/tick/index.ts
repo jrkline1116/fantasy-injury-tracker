@@ -122,6 +122,9 @@ async function syncPlayers(admin: Admin) {
       espn_id: p.espn_id ? String(p.espn_id) : null,
       // Sleeper knows about IR / PUP / NFI / suspensions that ESPN's injury feed leaves out
       sleeper_status: mapStatus(p.injury_status ?? (p.status && p.status !== "Active" ? p.status : null)),
+      // the injury itself, shown on the injury report (2.9.0, migration 015)
+      injury_body_part: p.injury_body_part ? String(p.injury_body_part).slice(0, 40) : null,
+      injury_start: /^\d{4}-\d{2}-\d{2}$/.test(String(p.injury_start_date ?? "")) ? p.injury_start_date : null,
       updated_at: new Date().toISOString(),
     });
   }

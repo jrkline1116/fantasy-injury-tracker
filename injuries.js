@@ -6,6 +6,8 @@
 
    Usage: const r = InjuryReport.create({ urlState: true })      -> r.el is the report's DOM node
           r.attach(parentEl)   put it on screen (reuses the same node, so filters and sort survive tab switches)
+          opts.loadNews(id)    optional (signed-in app): resolves to { items: [{ at, headline, story, source, url }] }
+          Tapping a player opens his details: injury, designation history, practice days, latest news.
           r.setMine(mine, linked)  Maps of player id -> label: the signed-in user's rostered players ("Main League")
                                    and their linked players ("Burrow's QB · Main League") */
 (() => {
@@ -177,11 +179,11 @@
       const prac = week.length
         ? `<span class="pc" title="Practice this week">${week.map((d) => `<span class="${esc(d.p)}" title="${esc(dayName(d.d))}: ${esc(PRAC[d.p] || d.p)}">${esc(dayLetter(d.d))} ${esc(d.p)}</span>`).join("")}</span>` : "";
       const from = p.from && p.from !== p.status ? `from ${p.from === "ACT" ? "active" : esc(p.from)}` : "";
-      return `<div class="pr${fresh ? " fresh" : ""}${mine ? " mine" : link ? " linked" : ""}">
+      return `<div class="pr${fresh ? " fresh" : ""}${mine ? " mine" : link ? " linked" : ""}" data-pid="${esc(p.id)}" role="button" tabindex="0" aria-label="${esc(p.name)}: details">
         <span class="st ${esc(p.status)}" title="${esc(STATUS[p.status] || p.status)}">${esc(p.status)}</span>
         <div class="nm">${esc(p.name)}<small>${esc(p.pos)} · ${esc(p.team)}</small>${fresh ? `<span class="tag newtag">NEW</span>` : ""}${mine ? `<span class="tag yourtag" title="On your team: ${esc(mine)}">YOURS</span>` : link ? `<span class="tag linktag" title="${esc(link)}">LINKED</span>` : ""}</div>
         <div class="when" title="${esc(new Date(p.since).toLocaleString())}">${esc(ago(p.since))}${from ? `<br><span>${from}</span>` : ""}</div>
-        <div class="meta">${prac}<span>${esc(gameText(p))}</span>${mine ? `<span class="myteams">${esc(mine)}</span>` : link ? `<span class="myteams">${esc(link)}</span>` : ""}</div>
+        <div class="meta">${p.injury ? `<span class="inj">${esc(p.injury)}</span>` : ""}${prac}<span>${esc(gameText(p))}</span>${mine ? `<span class="myteams">${esc(mine)}</span>` : link ? `<span class="myteams">${esc(link)}</span>` : ""}</div>
       </div>`;
     }
     function render() {
@@ -225,6 +227,91 @@
         : `Refreshed ${ago(S.fetchedAt)}${S.lastChange ? ` · last status change ${ago(S.lastChange)}` : ""} · updates every 2 minutes${S.err ? " (last try failed, retrying)" : ""}`;
     }
 
+
+    /* ---------- player details (tap a row) ---------- */
+    let dlg = null, openToken = 0;
+    const fmtDay = (iso) => new Date(iso + "T12:00:00Z").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+    const fmtWhen = (iso) => new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" });
+    const statusWord = (s) => (s === "ACT" ? "Active" : STATUS[s] || s);
+    function dialog() {
+      if (dlg) return dlg;
+      dlg = document.createElement("dialog");
+      dlg.className = "irdlg";
+      dlg.setAttribute("aria-label", "Player details");
+      dlg.addEventListener("click", (e) => {
+        if (e.target === dlg || e.target.closest("[data-close]")) dlg.close(); // tap outside or ✕
+      });
+      document.body.appendChild(dlg);
+      return dlg;
+    }
+    async function rpc(name, args) {
+      const res = await fetch(`${CFG.SUPABASE_URL}/rest/v1/rpc/${name}`, {
+        method: "POST", headers: { apikey: CFG.SUPABASE_ANON_KEY, "Content-Type": "application/json" }, body: JSON.stringify(args), cache: "no-store",
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    }
+    function detailHtml(base, d, news) {
+      const p = { ...base, ...(d || {}) };
+      const mine = S.mine?.get(p.id), link = S.linked?.get(p.id);
+      const injury = p.injury ? `<b>${esc(p.injury)}</b>${p.injury_start ? ` <span class="muted">(since ${esc(fmtWhen(p.injury_start + "T12:00:00Z"))})</span>` : ""}` : "";
+      const head = `<div class="dhead">
+          <span class="st ${esc(p.status)}">${esc(p.status)}</span>
+          <div><h3>${esc(p.name)}</h3><div class="sub">${esc(p.pos)} · ${esc(TEAMS[p.team] || p.team || "")}</div></div>
+          <button class="close" data-close aria-label="Close">✕</button>
+        </div>
+        <p class="dline"><b>${esc(statusWord(p.status))}</b>${injury ? " · " + injury : ""}</p>
+        <p class="dline muted">${esc(gameText(p))}${mine ? ` · On your team: <b>${esc(mine)}</b>` : link ? ` · ${esc(link)}` : ""}</p>`;
+
+      const prac = d?.practice?.length
+        ? `<ul class="dlist">${d.practice.slice(0, 8).map((r) => `<li><span class="pc"><span class="${esc(r.p)}">${esc(r.p)}</span></span> ${esc(fmtDay(r.d))}: ${esc(PRAC[r.p] || r.p)}</li>`).join("")}</ul>`
+        : `<p class="muted">${d ? "No practice reports in the last three weeks." : "Loading…"}</p>`;
+      const hist = d?.history?.length
+        ? `<ul class="dlist">${d.history.slice(0, 10).map((h) => `<li><span class="muted">${esc(fmtWhen(h.at))}</span> ${esc(statusWord(h.from))} → <b>${esc(statusWord(h.to))}</b></li>`).join("")}</ul>`
+        : `<p class="muted">${d ? "No changes in the last 60 days." : "Loading…"}</p>`;
+
+      let newsHtml;
+      if (!opts.loadNews) {
+        newsHtml = `<div class="dnote">Sign in free to read the latest news on every player, right here. <a href="./">Get Fantasy Injury Assist</a></div>`;
+      } else if (!news) {
+        newsHtml = `<p class="muted">Loading the latest news…</p>`;
+      } else if (news.error && !news.items?.length) {
+        newsHtml = `<p class="muted">${esc(news.error)}</p>`;
+      } else if (!news.items?.length) {
+        newsHtml = `<p class="muted">No news in the last 30 days.</p>`;
+      } else {
+        newsHtml = news.items.map((n) => `<article class="news">
+            <div class="nmeta">${esc(ago(n.at))} · ${esc(n.source)}</div>
+            <p class="nhead">${esc(n.headline)}</p>
+            ${n.story ? `<p class="nstory">${esc(n.story)}</p>` : ""}
+          </article>`).join("") + `<p class="hint">News excerpts from ESPN's fantasy feed (written by RotoWire, crediting the original reporter).</p>`;
+      }
+      const q = encodeURIComponent(`${p.name} injury`);
+      const links = [
+        p.espn_id ? `<a href="https://www.espn.com/nfl/player/_/id/${esc(p.espn_id)}" target="_blank" rel="noopener">ESPN player page</a>` : "",
+        `<a href="https://news.google.com/search?q=${q}" target="_blank" rel="noopener">Google News</a>`,
+        `<a href="https://x.com/search?q=${q}&f=live" target="_blank" rel="noopener">Latest on X</a>`,
+      ].filter(Boolean).join(" · ");
+      return `<div class="dlg">${head}
+        <h4>Latest news</h4>${newsHtml}
+        <h4>Practice <small class="muted">last 3 weeks</small></h4>${prac}
+        <h4>Status history</h4>${hist}
+        <p class="dlinks">More: ${links}</p></div>`;
+    }
+    async function openDetail(pid) {
+      const base = S.players.find((x) => x.id === pid); if (!base) return;
+      const token = ++openToken, box = dialog();
+      let d = null, news = null;
+      const paint = () => { if (token === openToken && box.open) box.innerHTML = detailHtml(base, d, news); };
+      box.innerHTML = detailHtml(base, null, null);
+      if (!box.open) box.showModal();
+      box.scrollTop = 0;
+      const jobs = [rpc("player_detail", { pid }).then((r) => { d = r || {}; paint(); }).catch(() => { d = { practice: [], history: [] }; paint(); })];
+      if (opts.loadNews) jobs.push(Promise.resolve(opts.loadNews(pid)).then((r) => { news = r || { items: [] }; paint(); })
+        .catch((e) => { news = { items: [], error: (e && e.message) || "Couldn't load news." }; paint(); }));
+      await Promise.all(jobs);
+    }
+
     /* ---------- auto refresh: only while on screen and the browser tab is visible ---------- */
     const onScreen = () => el.isConnected && !document.hidden;
     setInterval(() => { if (onScreen() && Date.now() - S.fetchedAt >= REFRESH_MS - 1000) load(); }, 15 * 1000);
@@ -237,7 +324,12 @@
     // Enter in the search box closes the phone keyboard
     f("q").addEventListener("keydown", (e) => { if (e.key === "Enter") f("q").blur(); });
     for (const k of ["team", "pos", "status"]) f(k).addEventListener("change", () => { S[k] = f(k).value; save(); render(); f(k).blur(); });
+    el.addEventListener("keydown", (e) => {
+      const r = e.target.closest?.(".pr[data-pid]");
+      if (r && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openDetail(r.dataset.pid); }
+    });
     el.addEventListener("click", (e) => {
+      const r = e.target.closest(".pr[data-pid]"); if (r) { openDetail(r.dataset.pid); return; }
       const m = e.target.closest("[data-mine]");
       if (m) { if (m.dataset.mine === "linked") S.onlyLinked = !S.onlyLinked; else S.onlyMine = !S.onlyMine; save(); render(); return; }
       const b = e.target.closest("button[data-sort]"); if (!b) return;

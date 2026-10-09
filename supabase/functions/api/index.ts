@@ -7,6 +7,7 @@
 //   syncLeagueNow / releaseClaim / unlinkTeam   league sync (Sleeper + ESPN + Yahoo)
 //   yahooStart / yahooLeagues                    Yahoo sign-in and league list
 //   deleteAccount                                 erase the account and everything tied to it
+//   playerNews                                    latest news blurbs for one player (injury report details)
 import { addPlayersToTeam, adminClient, cors, deliver, json, loadUser, pregameLines, sendPush, statusAlerts, type Admin } from "../_shared/core.ts";
 import { claimTeam, leagueForInvite, leagueInfo, linkLeague, ReconnectError, sleeperUserLeagues, syncLeague, yahooAuthUrl, yahooConnected, yahooDiagnose, yahooUserLeagues } from "../_shared/leagues.ts";
 
@@ -91,6 +92,7 @@ Deno.serve(async (req) => {
         await admin.from("user_teams").update({ league_team_id: null }).eq("id", String(body.teamId)).eq("user_id", user.id);
         return json({ ok: true });
       }
+      case "playerNews": return json(await playerNews(admin, String(body.playerId ?? "")));
       case "deleteAccount": {
         // Leagues this person linked: hand them to another member who claimed a team, so the
         // league keeps working for everyone else. Their own ESPN cookies / Yahoo login go with them.
@@ -121,3 +123,58 @@ async function ownTeam(admin: Admin, userId: string, teamId: string) {
   if (!data) throw new Error("Team not found.");
   return data;
 }
+
+/* ---------- player news (2.9.0) ----------
+   The latest fantasy news blurbs for one player from ESPN's fantasy news feed (written by RotoWire, and they
+   name the original reporter). Cached 15 minutes per player in player_news_cache so taps don't hammer ESPN.
+   Signed-in users only. Short excerpts with a link to the full update. */
+const NEWS_TTL_MS = 15 * 60 * 1000;
+const NEWS_URL = (id: string) => `https://site.api.espn.com/apis/fantasy/v2/games/ffl/news/players?days=30&playerId=${encodeURIComponent(id)}`;
+type NewsItem = { at: string; headline: string; story: string; source: string; url: string };
+
+function clip(text: string, max: number) {
+  const t = text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+  return (end > max * 0.5 ? cut.slice(0, end + 1) : cut.replace(/\s+\S*$/, "")) + (end > max * 0.5 ? "" : "…");
+}
+
+async function playerNews(admin: Admin, playerId: string) {
+  if (!/^[A-Za-z0-9_-]{1,20}$/.test(playerId)) return { items: [], error: "Unknown player." };
+  const { data: cached } = await admin.from("player_news_cache").select("fetched_at,items").eq("player_id", playerId).maybeSingle();
+  if (cached && Date.now() - new Date(cached.fetched_at).getTime() < NEWS_TTL_MS) return { items: cached.items, cached: true };
+
+  const { data: p } = await admin.from("nfl_players").select("espn_id").eq("id", playerId).maybeSingle();
+  if (!p?.espn_id) return { items: [], note: "No news source for this player yet." };
+  const playerPage = `https://www.espn.com/nfl/player/_/id/${p.espn_id}`;
+
+  let items: NewsItem[] = [];
+  try {
+    const res = await fetch(NEWS_URL(p.espn_id), { headers: { "user-agent": "Mozilla/5.0 (compatible; FantasyInjuryAssist/2.9)", accept: "application/json" } });
+    if (!res.ok) throw new Error(`ESPN news ${res.status}`);
+    const d = await res.json();
+    const feed = Array.isArray(d?.feed) ? d.feed : [];
+    const seen = new Set<string>();
+    for (const n of feed) {
+      const headline = clip(String(n.headline ?? n.description ?? ""), 300);
+      if (!headline || seen.has(headline)) continue;
+      seen.add(headline);
+      items.push({
+        at: String(n.published ?? n.lastModified ?? ""),
+        headline,
+        story: clip(String(n.story ?? ""), 420),
+        source: n.type === "Rotowire" ? "RotoWire via ESPN" : "ESPN",
+        url: playerPage, // ESPN shows these blurbs in the player page's news section
+      });
+      if (items.length >= 8) break;
+    }
+  } catch (e) {
+    console.error("playerNews", playerId, e);
+    if (cached) return { items: cached.items, cached: true, stale: true };
+    return { items: [], error: "Couldn't reach the news feed. Try again in a minute." };
+  }
+  await admin.from("player_news_cache").upsert({ player_id: playerId, fetched_at: new Date().toISOString(), items });
+  return { items };
+}
+
