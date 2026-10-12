@@ -108,6 +108,9 @@ async function syncPlayers(admin: Admin) {
   const res = await fetch(SLEEPER_PLAYERS);
   if (!res.ok) throw new Error(`Sleeper players ${res.status}`);
   const all = await res.json() as Record<string, any>;
+  // ESPN ids we learned from the injury feed (2.9.1): keep them when Sleeper has none
+  const known = new Map((await fetchAll<{ id: string; espn_id: string }>(
+    (a, b) => admin.from("nfl_players").select("id,espn_id").not("espn_id", "is", null).order("id").range(a, b))).map((r) => [r.id, r.espn_id]));
   const rows: Record<string, unknown>[] = [];
   for (const p of Object.values(all)) {
     const pos = p.position === "DEF" ? "DEF" : p.position;
@@ -119,7 +122,7 @@ async function syncPlayers(admin: Admin) {
     rows.push({
       id: String(p.player_id), full_name: full, search_name: normName(full), pos, team: p.team ?? null,
       depth_order: depthOk ? (p.depth_chart_order ?? null) : (pos === "QB" || pos === "RB" ? (p.depth_chart_order ?? null) : null),
-      espn_id: p.espn_id ? String(p.espn_id) : null,
+      espn_id: p.espn_id ? String(p.espn_id) : (known.get(String(p.player_id)) ?? null),
       // Sleeper knows about IR / PUP / NFI / suspensions that ESPN's injury feed leaves out
       sleeper_status: mapStatus(p.injury_status ?? (p.status && p.status !== "Active" ? p.status : null)),
       // the injury itself, shown on the injury report (2.9.0, migration 015)
@@ -200,9 +203,10 @@ async function pollInjuries(admin: Admin, now: Date, firstRun: boolean, week: Aw
   const players = await fetchAll<{ id: string; espn_id: string | null; search_name: string; team: string | null; sleeper_status: string | null }>(
     (a, b) => admin.from("nfl_players").select("id,espn_id,search_name,team,sleeper_status").order("id").range(a, b));
   const byEspn = new Map<string, string>();
+  const hasEspn = new Set<string>(), learned = new Map<string, string>();
   const byName = new Map<string, { id: string; team: string | null }[]>();
   for (const p of players) {
-    if (p.espn_id) byEspn.set(p.espn_id, p.id);
+    if (p.espn_id) { byEspn.set(p.espn_id, p.id); hasEspn.add(p.id); }
     const arr = byName.get(p.search_name) ?? []; arr.push(p); byName.set(p.search_name, arr);
   }
 
@@ -213,11 +217,18 @@ async function pollInjuries(admin: Admin, now: Date, firstRun: boolean, week: Aw
     if (!pid) {
       const c = byName.get(normName(e.name)) ?? [];
       pid = (c.find((x) => x.team === e.team) ?? (c.length === 1 ? c[0] : undefined))?.id;
+      // Sleeper has no ESPN id for some players (e.g. Michael Penix): learn it here so news and links work
+      if (pid && e.espnId && !hasEspn.has(pid)) { learned.set(pid, e.espnId); byEspn.set(e.espnId, pid); hasEspn.add(pid); }
     }
     if (!pid) continue;
     const code = mapStatus(e.status);
     const prev = next.get(pid);
     if (!prev || rank[code] > rank[prev.status]) next.set(pid, { status: code, detail: e.detail });
+  }
+
+  for (const [id, espnId] of learned) {
+    const { error } = await admin.from("nfl_players").update({ espn_id: espnId }).eq("id", id).is("espn_id", null);
+    if (error) console.error("learn espn_id", id, error);
   }
 
   // players ESPN doesn't list but Sleeper says are unavailable long-term

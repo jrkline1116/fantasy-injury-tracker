@@ -278,7 +278,7 @@
       } else if (news.error && !news.items?.length) {
         newsHtml = `<p class="muted">${esc(news.error)}</p>`;
       } else if (!news.items?.length) {
-        newsHtml = `<p class="muted">No news in the last 30 days.</p>`;
+        newsHtml = `<p class="muted">${news.note ? "No news feed for this player yet. Try Google News below." : "No recent news."}</p>`;
       } else {
         newsHtml = news.items.map((n) => `<article class="news">
             <div class="nmeta">${esc(ago(n.at))} · ${esc(n.source)}</div>
