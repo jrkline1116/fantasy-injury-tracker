@@ -1,6 +1,6 @@
 /* Fantasy Injury Assist — app */
 "use strict";
-const APP_VERSION = "2.9.1"; // keep in sync with sw.js VERSION
+const APP_VERSION = "2.9.2"; // keep in sync with sw.js VERSION
 const CFG = window.FIT_CONFIG || {};
 const CONFIGURED = CFG.SUPABASE_URL && !CFG.SUPABASE_URL.includes("YOUR-") && CFG.SUPABASE_ANON_KEY && !CFG.SUPABASE_ANON_KEY.includes("YOUR-");
 const sb = CONFIGURED ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, detectSessionInUrl: true } }) : null;
@@ -354,7 +354,7 @@ function syncBar(t) {
 }
 function ago(ts) {
   const m = Math.round((Date.now() - new Date(ts).getTime()) / 60000);
-  return m < 2 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} hr ago` : `${Math.round(m / 1440)} days ago`;
+  return m < 2 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} hr ago` : `${Math.round(m / 1440)} day${Math.round(m / 1440) === 1 ? "" : "s"} ago`;
 }
 function lineupRows(t) {
   const filled = S.roster.filter((r) => r.team_id === t.id).sort((x, y) => (x.sort ?? 0) - (y.sort ?? 0) || String(x.created_at || "").localeCompare(String(y.created_at || "")));
@@ -849,11 +849,33 @@ function addPlayerDlg() {
   setTimeout(() => $("q")?.focus(), 50);
 }
 
+/* ---------------- latest news in the player dialog (2.9.2) ----------------
+   One snippet (the newest) from the same feed as the injury report's details card.
+   Kept for 10 minutes per player so reopening the dialog doesn't refetch. */
+const newsCache = new Map();
+function newsHtml(n) {
+  if (!n) return `<span class="muted">Loading latest news…</span>`;
+  const it = n.items?.[0];
+  if (!it) return `<span class="muted">${n.error ? esc(n.error) : n.note ? "No news feed for this player yet." : "No recent news."}</span>`;
+  return `<div class="nmeta">Latest news${it.at ? ` · ${esc(ago(it.at))}` : ""} · ${esc(it.source || "ESPN")}</div>
+    <p class="nhead">${esc(it.headline)}</p>${it.story ? `<p class="nstory">${esc(it.story)}</p>` : ""}`;
+}
+function newsSlot(pid) { return `<div class="pnews" id="pnews" data-pid="${esc(pid)}" aria-live="polite">${newsHtml(newsCache.get(pid))}</div>`; }
+async function loadNews(pid) {
+  const hit = newsCache.get(pid);
+  if (!hit || Date.now() - hit.t > 10 * 60000) {
+    try { newsCache.set(pid, { ...(await api("playerNews", { playerId: pid })), t: Date.now() }); }
+    catch { if (!hit) { const el = $("pnews"); if (el?.dataset.pid === pid) el.innerHTML = newsHtml({ items: [], error: "Couldn't load news right now." }); return; } }
+  }
+  const el = $("pnews"); if (el?.dataset.pid === pid) el.innerHTML = newsHtml(newsCache.get(pid));
+}
+
 function playerDlg(rosterId) {
   const r = S.roster.find((x) => x.id === rosterId); if (!r) return closeDlg();
   const p = P(r.player_id), st = S.statuses.get(p.id);
   const links = S.links.filter((l) => l.roster_id === r.id);
   openDlg(`<h3>${esc(p.full_name)}</h3><p class="sub">${esc(p.pos)}, ${esc(p.team || "FA")} · ${badge(st?.status || "ACT", 1)} ${esc(stLabel(st?.status || "ACT"))}</p>
+    ${newsSlot(p.id)}
     ${noteBlock(p.id)}
     <div><div><label class="f" for="pnot">Alerts for him</label>${notifySelect("pnot", r.notify, ["inherit", "all", "impact", "mute"], "Use team setting")}
       <div class="hint">${snoozedRow(r) ? `Snoozed until ${esc(new Date(r.snooze_until).toLocaleDateString([], { weekday: "long" }))} with the bell on your roster. Tap the bell again to turn alerts back on.` : "Need a short break? The bell on your roster snoozes him and his linked players until Tuesday."}</div></div></div>
@@ -868,6 +890,7 @@ function playerDlg(rosterId) {
     <div class="hint" style="margin-top:-4px">"Ahead of him" = if that player is out, yours gets more work. "Handcuff" = the player behind yours.</div>
     ${searchBox("Search a player to link")}
     <div class="actions"><button class="btn" data-act="savePlayer" data-roster="${r.id}">Save changes</button><button class="btn danger" data-act="dropPlayer" data-roster="${r.id}">Drop player</button></div><div id="dlgErr" class="err"></div>`);
+  loadNews(p.id);
   searchPick = async (lp) => {
     if (!S.players.has(lp.id)) S.players.set(lp.id, { id: lp.id, full_name: lp.name, pos: lp.pos, team: lp.team || null, depth_order: null });
     const [ins] = await Promise.all([sb.from("links").insert({ team_id: r.team_id, roster_id: r.id, player_id: lp.id, kind: $("lk").value }).select().single(), ensurePlayers([lp.id])]);
