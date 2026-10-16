@@ -1,0 +1,35 @@
+/* Content pages: guides, about, contact (2.9.3). Builds on app.css. */
+body{padding-bottom:24px}
+.wide{max-width:760px}
+.sitename{font:700 1.65rem/1 var(--cond);letter-spacing:.01em;color:inherit;text-decoration:none}
+.topnav{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.9rem;font-weight:600;padding:0 0 10px}
+.topnav a{text-decoration:none}
+.topnav a[aria-current]{color:var(--ink);text-decoration:underline;text-underline-offset:4px}
+.crumbs{font-size:.85rem;color:var(--muted);margin:6px 0 10px}
+.crumbs a{color:var(--muted)}
+.doc{line-height:1.6}
+.doc-title{font:700 2rem/1.1 var(--cond);margin:10px 0 6px}
+.doc h2{font-size:1.35rem;margin:28px 0 8px}
+.doc p,.doc li,.doc dd{max-width:44em}
+.doc ul,.doc ol{padding-left:22px}
+.doc li{margin:0 0 6px}
+.lede{font-size:1.05rem}
+.terms{margin:8px 0 12px}
+.terms dt{font-weight:700;margin-top:12px}
+.terms dd{margin:2px 0 0}
+table.grid{border-collapse:collapse;width:100%;max-width:44em;margin:8px 0 14px;font-size:.93rem}
+table.grid th,table.grid td{text-align:left;vertical-align:top;padding:8px 10px;border-bottom:1px solid var(--line)}
+table.grid th{font-weight:700;background:var(--surface2)}
+.ctabox{background:var(--surface);border:1.5px solid var(--brand);border-radius:10px;padding:14px 16px;margin:28px 0}
+.ctabox h3{font:700 1.2rem/1.1 var(--cond);margin:0 0 6px}
+.ctabox p{margin:0 0 10px;font-size:.93rem}
+.ctabox .btn{text-decoration:none;display:inline-block}
+.doc .guidelist{list-style:none;padding:0;margin:16px 0;display:grid;gap:10px}
+.gcard{display:block;padding:14px 16px;background:var(--surface);border:1px solid var(--line);border-radius:10px;text-decoration:none;color:var(--ink)}
+.gcard:hover{border-color:var(--brand)}
+.gt{display:block;font:700 1.15rem/1.15 var(--cond);color:var(--brand);margin-bottom:4px}
+.gd{display:block;font-size:.92rem;color:var(--muted)}
+.morelist li{margin-bottom:4px}
+.bigmail{font-size:1.2rem;font-weight:600;margin:10px 0 6px}
+@media (max-width:480px){.doc-title{font-size:1.7rem}.doc h2{font-size:1.2rem}}
+@media print{header,.adwrap,.ctabox,.foot{display:none}}
