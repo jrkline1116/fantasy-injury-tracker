@@ -200,10 +200,10 @@ type Change = { playerId: string; from: string; to: string; eventId?: string | n
 const WORD: Record<string, string> = { ACT: "ACTIVE", Q: "QUESTIONABLE", D: "DOUBTFUL", O: "OUT", IR: "IR", SUS: "SUSPENDED" };
 export const word = (s: string) => WORD[s] ?? s;
 const SUFFIX = /^(jr|sr|ii|iii|iv|v)\.?$/i;
+/** Full name everywhere: last names alone collide (Bijan vs Brian Robinson, both ATL). */
 export function shortName(p: Player): string {
   if (p.pos === "DEF") return p.full_name;
-  const t = p.full_name.split(/\s+/).filter((x) => !SUFFIX.test(x));
-  return t.length > 1 ? t[t.length - 1] : p.full_name;
+  return p.full_name.split(/\s+/).filter((x) => !SUFFIX.test(x)).join(" ") || p.full_name;
 }
 /** Short names for two players, falling back to full names if they'd look the same. */
 function names(a: Player, b: Player): [string, string] {
@@ -292,9 +292,11 @@ export function newsAlerts(ctx: Ctx, items: { playerId: string; note: string }[]
       for (const l of ctx.links.filter((x) => x.team_id === t.id && x.player_id === it.playerId)) {
         const r = troster.find((x) => x.id === l.roster_id), fp = r && ctx.players.get(r.player_id);
         if (!r || !fp || (r.slot === "bench" && benchQuiet) || inSet(opts.week?.live, fp)) continue;
+        if (WONT_PLAY.has(ctx.statuses.get(fp.id) ?? "ACT")) continue; // your player is out himself: his own alert covers it
         const lv = level(st, t, r, l);
         if (lv === "off" || lv === "mute") continue;
-        add(`→ watch ${names(pl, fp)[1]} · ${it.note}`);
+        const [trig, f] = names(pl, fp);
+        add(`→ ${f} WATCH · ${trig} ${it.note.replace(/\.+\s*$/, "")}`);
       }
     }
     for (const [uid, lines] of byUser) {
@@ -381,6 +383,7 @@ export function statusAlerts(ctx: Ctx, changes: Change[], opts: { now: Date; tes
         const fp = r && ctx.players.get(r.player_id);
         if (!r || !fp) continue;
         if (!opts.test && inSet(opts.week?.live, fp)) continue;
+        if (!opts.test && WONT_PLAY.has(ctx.statuses.get(fp.id) ?? "ACT")) continue; // your player is out himself: nothing to act on
         if (r.slot === "bench" && benchQuiet) continue;
         if (!wants(level(st, t, r, l), ch.from, ch.to)) continue;
         const [trig, f] = names(pl, fp);
